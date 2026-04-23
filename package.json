@@ -1,7 +1,7 @@
 {
   "name": "@dreki-gg/pi-subagent",
   "version": "0.6.0",
-  "description": "Subagent tool and delegate orchestration for pi — isolated agents, parallel scouts, planning gates, and workflow presets",
+  "description": "Subagent tool and direct agent runs for pi — isolated agents, parallel scouts, bundled agents, and workflow templates"
   "keywords": [
     "pi-package"
   ],
@@ -44,6 +44,6 @@
     "@mariozechner/pi-agent-core": "*",
     "@mariozechner/pi-coding-agent": "*",
     "@mariozechner/pi-tui": "*",
-    "@sinclair/typebox": "*"
+    "typebox": "*"
   }
 }
