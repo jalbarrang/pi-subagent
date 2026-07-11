@@ -6,6 +6,7 @@
       "name": "@dreki-gg/pi-subagent",
       "dependencies": {
         "@agentclientprotocol/sdk": "^1.0.0",
+        "zod": "^3.25.0 || ^4.0.0",
       },
       "devDependencies": {
         "@earendil-works/pi-agent-core": "^0.75.4",
