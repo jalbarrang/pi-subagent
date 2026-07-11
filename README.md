@@ -26,6 +26,10 @@ Notes:
 - `/run-agent` provides autocomplete for `--model` and `--thinking`
 - the `subagent` tool supports the same fields in its schema, but this package does not currently add custom interactive autocomplete for tool-call JSON parameters
 
+### Agent Discovery
+
+The `list_agents` tool lets the model discover available agents (names, descriptions, sources, capabilities) before spawning. It takes an optional `agentScope` (`user` | `project` | `both`, default `user`).
+
 ## Cursor Composer (ACP backend)
 
 Set a subagent's model to `cursor:<model>` to run the task on Cursor's agent via the
@@ -58,14 +62,14 @@ identical to pi-backed subagents.
 
 ## Model Routing
 
-The `spawn-subagents` skill teaches the orchestrating agent to route each task to the model whose strengths match the work instead of one default model for everything:
+Route each task to the model whose strengths match the work instead of one default model for everything:
 
 - **Bulk token burn goes cheap** — log digging, large specs, migrations, clear-spec implementation.
 - **User-facing output goes tasteful** — public APIs, SDKs, UI copy go to (or are reviewed by) the highest-taste model.
 - **Reviews get the strong model** — cheap models only as an extra perspective, never the sole reviewer.
 - **Defaults, not limits** — redo cheap-model output on a stronger model without asking; judge the output, not the price tag.
 
-If your context files (e.g. a global `AGENTS.md`) define a model routing policy — a table scoring your models on intelligence / taste / cost — the skill treats it as authoritative when picking per-task `model` overrides. Result headers and working messages show which model ran each task (` · model`), so quality is auditable per model.
+If your context files (e.g. a global `AGENTS.md`) define a model routing policy — a table scoring your models on intelligence / taste / cost — treat it as authoritative when picking per-task `model` overrides. Result headers and working messages show which model ran each task (` · model`), so quality is auditable per model.
 
 ## Opinionated Defaults
 
@@ -92,7 +96,6 @@ Safe defaults:
 - "have planner make a plan, then worker implement it"
 - "send this to reviewer"
 - "ask advisor whether this migration should be split before sending it to worker"
-- "use manager for this cross-package migration"
 
 For direct user-invoked single-agent runs, use:
 
@@ -114,7 +117,6 @@ spawn scout and docs-scout in parallel for auth session refresh
 have worker implement the questionnaire validation fix
 send this diff to reviewer, and if a claim needs proof use validator or bug-prover
 ask advisor whether this migration should be split before implementation
-use manager for this cross-package migration
 ```
 
 Recommended pattern in practice:
@@ -122,9 +124,8 @@ Recommended pattern in practice:
 - `chain`: `scout` → `planner` → `worker` for coherent implementation
 - `chain`: `worker` → `reviewer`, then optionally `validator` / `bug-prover`, then `worker` for a prove-before-fix loop
 - `single`: `advisor` for a focused second opinion on a hard decision, failing test loop, or high-risk change
-- `single`: `manager` for multi-slice work that needs bounded delegation and synthesis
 
-`advisor` and `manager` are higher-level entry points built on the same `single` / `parallel` / `chain` primitives. `advisor` is for capability routing and second opinions; `manager` is for coherent delegation, not arbitrary peer-to-peer swarms. `validator` and `bug-prover` support evidence-driven review: validate a claim first, then build the smallest repro only when needed.
+`advisor` is a higher-level entry point built on the same `single` / `parallel` / `chain` primitives, meant for capability routing and second opinions. `validator` and `bug-prover` support evidence-driven review: validate a claim first, then build the smallest repro only when needed.
 
 ## Direct Agent Runs
 
@@ -141,7 +142,6 @@ Examples:
 /run-agent validator validate whether this suspected regression is real
 /run-agent bug-prover create a minimal failing repro for the auth refresh bug
 /run-agent advisor sanity-check whether this migration should be split
-/run-agent manager coordinate a multi-package migration plan
 /run-agent worker implement the refactor we just planned
 /run-agent --scope project reviewer review the latest changes
 ```
@@ -179,22 +179,29 @@ The package ships with these agents out of the box:
 
 | Agent | Purpose | Default model | Default reasoning level |
 |------|---------|---------------|-------------------------|
-| `scout` | Fast codebase recon | `openai/gpt-5.4-mini` | `medium` |
-| `docs-scout` | Context7-first documentation lookup | `openai/gpt-5.4-mini` | `medium` |
-| `planner` | Implementation planning | `openai/gpt-5.4` | `high` |
-| `worker` | General-purpose implementation | `openai/gpt-5.4` | `medium` |
-| `reviewer` | Code review | `openai/gpt-5.4` | `medium` |
-| `validator` | Validate or falsify a specific bug or behavior claim from code, tests, and commands | `openai/gpt-5.4` | `medium` |
-| `bug-prover` | Create the smallest failing repro for a suspected bug | `openai/gpt-5.4` | `medium` |
-| `advisor` | Focused second-opinion consult for tricky planning, implementation, or review decisions | `openai/gpt-5.4` | `medium` |
-| `manager` | Bounded orchestration for multi-slice work | `openai/gpt-5.4` | `high` |
-| `ux-designer` | Frontend UI design | `anthropic/claude-opus-4-6` | `medium` |
+| `scout` | Fast codebase recon | `openai/gpt-5.6-luna` | `low` |
+| `docs-scout` | Context7-first documentation lookup | `openai/gpt-5.6-luna` | `low` |
+| `planner` | Implementation planning | `anthropic/claude-opus-4-6` | `high` |
+| `worker` | General-purpose implementation | `cursor:composer-2.5` | — |
+| `reviewer` | Code review | `anthropic/claude-opus-4-6` | `high` |
+| `validator` | Validate or falsify a specific bug or behavior claim from code, tests, and commands | `anthropic/claude-opus-4-6` | `high` |
+| `bug-prover` | Create the smallest failing repro for a suspected bug | `anthropic/claude-opus-4-6` | `high` |
+| `advisor` | Focused second-opinion consult for tricky planning, implementation, or review decisions | `anthropic/claude-opus-4-6` | `high` |
+| `ux-designer` | Frontend UI design | `anthropic/claude-opus-4-6` | `high` |
 
 Notes:
-- `worker`, `reviewer`, `bug-prover`, and `manager` default to `sessionStrategy: fork-at`.
+- `worker`, `reviewer`, and `bug-prover` default to `sessionStrategy: fork-at`.
 - "Default reasoning level" maps to the frontmatter field `thinking` and can be overridden per run.
 
 Resolution order is: bundled → user (`~/.pi/agent/prompts/`) → project (`.pi/prompts/`). Project agents override user and bundled agents by name.
+
+To scaffold a new project-local agent, run:
+
+```text
+/create-agent <name> [description]
+```
+
+This creates `.pi/prompts/<name>.md` with frontmatter and a starter system prompt. The bundled `write-an-agent` skill helps write or tighten agent definitions (sharp role, tool policy, output contract, under 100 lines).
 
 Optional frontmatter:
 - `thinking` — default reasoning effort for the spawned pi process
@@ -205,7 +212,7 @@ Optional frontmatter:
 ## Bundled Resources
 
 ### Skill
-- `spawn-subagents` — guides the model on when/how to spawn specialized subagents conversationally
+- `write-an-agent` — writes or refines concise agent definitions (sharp role, tool policy, output contract, under 100 lines)
 
 ### No Prompt Templates by Design
 This package intentionally does **not** ship canned workflow prompts.
