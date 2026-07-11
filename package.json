@@ -1,7 +1,7 @@
 {
   "name": "@dreki-gg/pi-subagent",
   "version": "0.11.0",
-  "description": "Subagent tool and direct agent runs for pi — isolated agents, parallel scouts, manager workflows, and bundled prompts",
+  "description": "Subagent tool and direct agent runs for pi \u2014 isolated agents, parallel scouts, manager workflows, and bundled prompts",
   "keywords": [
     "pi-package"
   ],
@@ -9,8 +9,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/dreki-gg/pi-extensions",
-    "directory": "packages/subagent"
+    "url": "git+https://github.com/jalbarrang/pi-subagent.git"
   },
   "type": "module",
   "scripts": {
@@ -34,17 +33,22 @@
     "@agentclientprotocol/sdk": "^1.0.0"
   },
   "devDependencies": {
-    "@types/node": "24",
+    "@types/node": "^24",
     "oxfmt": "^0.43.0",
     "oxlint": "^1.58.0",
-    "typescript": "^6.0.0"
+    "typescript": "^5.9.0",
+    "@earendil-works/pi-ai": "^0.75.4",
+    "@earendil-works/pi-agent-core": "^0.75.4",
+    "@earendil-works/pi-coding-agent": "^0.75.4",
+    "@earendil-works/pi-tui": "^0.75.4",
+    "typebox": "^1.0.55"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-agent-core": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "typebox": "*"
+    "@earendil-works/pi-ai": "^0.75.4",
+    "@earendil-works/pi-agent-core": "^0.75.4",
+    "@earendil-works/pi-coding-agent": "^0.75.4",
+    "@earendil-works/pi-tui": "^0.75.4",
+    "typebox": "^1.0.55"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-ai": {
