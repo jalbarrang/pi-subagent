@@ -1,5 +1,12 @@
 # @dreki-gg/pi-subagent
 
+## [0.11.2](https://github.com/jalbarrang/pi-subagent/compare/v0.11.1...v0.11.2) (2026-07-11)
+
+
+### Bug Fixes
+
+* declare zod as a direct dependency ([5f981bb](https://github.com/jalbarrang/pi-subagent/commit/5f981bb5c56750721c4aaf646739d771877d9bb7))
+
 ## 0.11.0
 
 ### Minor Changes
