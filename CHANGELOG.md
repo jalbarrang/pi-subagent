@@ -1,5 +1,12 @@
 # @dreki-gg/pi-subagent
 
+## [0.12.0](https://github.com/jalbarrang/pi-subagent/compare/v0.11.3...v0.12.0) (2026-07-12)
+
+
+### Features
+
+* replace reviewer prompt with scout/consult/worker families ([196de12](https://github.com/jalbarrang/pi-subagent/commit/196de120007d27e93e12374bcc56cb6c44c2007e))
+
 ## [0.11.3](https://github.com/jalbarrang/pi-subagent/compare/v0.11.2...v0.11.3) (2026-07-12)
 
 
