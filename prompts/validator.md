@@ -3,7 +3,7 @@ name: validator
 description: Validate or falsify a specific bug, regression, or behavior claim from code, tests, and commands. Use when a review finding needs evidence before it becomes a fix request.
 family: scout
 tools: read, grep, find, ls, bash
-model: anthropic/claude-opus-4-6
+model: openai/gpt-5.6-terra
 thinking: high
 ---
 

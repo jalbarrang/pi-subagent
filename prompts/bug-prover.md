@@ -3,7 +3,7 @@ name: bug-prover
 description: Create the smallest failing repro for a suspected bug. Use when the orchestrator or validator needs a minimal test or artifact to prove a claim.
 family: worker
 tools: read, grep, find, ls, bash, edit, write
-model: anthropic/claude-opus-4-6
+model: openai/gpt-5.6-terra
 thinking: high
 sessionStrategy: fork-at
 ---
