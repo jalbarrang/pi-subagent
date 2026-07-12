@@ -1,5 +1,12 @@
 # @dreki-gg/pi-subagent
 
+## [0.11.3](https://github.com/jalbarrang/pi-subagent/compare/v0.11.2...v0.11.3) (2026-07-12)
+
+
+### Bug Fixes
+
+* **deps:** bump dependencies to latest ([#3](https://github.com/jalbarrang/pi-subagent/issues/3)) ([20ea751](https://github.com/jalbarrang/pi-subagent/commit/20ea751163d3178634d5ac33ff1c25a10ec37b81))
+
 ## [0.11.2](https://github.com/jalbarrang/pi-subagent/compare/v0.11.1...v0.11.2) (2026-07-11)
 
 
