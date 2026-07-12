@@ -9,6 +9,7 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 const TEMPLATE = `---
 name: {{name}}
 description: {{description}}
+family: worker
 ---
 
 You are the **{{name}}** agent.
@@ -82,8 +83,9 @@ export function registerCreateAgentCommand(pi: ExtensionAPI) {
           '',
           `Agent name: **${name}**`,
           `Description: ${description}`,
+          'Default family: **worker**',
           '',
-          'The file has a basic template. You can now read and refine the agent prompt to fit your needs.',
+          'The file has a basic template. Refine the family deliberately: use `scout` for read-only reconnaissance/evidence, `consult` for read-only judgment/design, or `worker` for code and artifact changes.',
           'Remember to use `agentScope: "both"` or `agentScope: "project"` when spawning this agent.',
         ].join('\n'),
         { deliverAs: 'followUp' },

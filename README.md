@@ -66,25 +66,22 @@ Route each task to the model whose strengths match the work instead of one defau
 
 - **Bulk token burn goes cheap** — log digging, large specs, migrations, clear-spec implementation.
 - **User-facing output goes tasteful** — public APIs, SDKs, UI copy go to (or are reviewed by) the highest-taste model.
-- **Reviews get the strong model** — cheap models only as an extra perspective, never the sole reviewer.
+- **Review judgment stays with the strong orchestrator** — use cheaper subagents for evidence or an extra perspective, not the final call.
 - **Defaults, not limits** — redo cheap-model output on a stronger model without asking; judge the output, not the price tag.
 
 If your context files (e.g. a global `AGENTS.md`) define a model routing policy — a table scoring your models on intelligence / taste / cost — treat it as authoritative when picking per-task `model` overrides. Result headers and working messages show which model ran each task (` · model`), so quality is auditable per model.
 
-## Opinionated Defaults
+## Operating Model
 
-This package is intentionally opinionated about orchestration:
+Agents belong to one of three families:
 
-- Use **parallel mode for discovery, not competing edits**.
-- Prefer **one worker** and surround it with scouts, planners, and reviewers.
-- Use **chain mode** when work needs ordered handoffs.
-- Treat `reviewer` as a **verifier with fresh context**, not as a second writer.
-- Use `advisor` for **targeted second opinions** on tricky or high-risk cases, not as a default extra hop.
-- Only split implementation across multiple workers when file ownership is clearly partitioned.
+- **Scouts** gather repository, documentation, or behavioral evidence and return compressed handoffs.
+- **Consults** apply judgment to planning, design, or difficult decisions without editing files.
+- **Workers** produce code changes or proof artifacts.
 
-A good default mental model is: **parallel readers, single writer**.
+Prefer **one writer, many thinkers**. Use parallel mode for independent read-only discovery, not competing edits. Use chain mode for ordered handoffs such as scout → planner → worker. Review worker diffs in the main thread, where the orchestrator has the goal and full conversation context. Dispatch `validator` for one uncertain claim and `bug-prover` only when proof requires a new test or artifact. Split implementation across workers only when file ownership is clearly partitioned.
 
-See [`docs/orchestration-principles.md`](./docs/orchestration-principles.md) for the fuller guidance.
+A good default mental model is: **parallel readers, single writer, main-thread judgment**.
 
 ## Recommended Usage
 
@@ -94,14 +91,14 @@ Safe defaults:
 - "spawn a scout for the auth code"
 - "run scout and docs-scout in parallel"
 - "have planner make a plan, then worker implement it"
-- "send this to reviewer"
+- "review the worker diff, then ask validator to check this exact concern"
 - "ask advisor whether this migration should be split before sending it to worker"
 
 For direct user-invoked single-agent runs, use:
 
 ```text
 /run-agent worker implement the auth flow we discussed
-/run-agent --model anthropic/claude-opus-4-6 --thinking high reviewer review the latest diff
+/run-agent --model anthropic/claude-opus-4-6 --thinking high validator verify whether token refresh can race logout
 ```
 
 Autocomplete notes:
@@ -115,14 +112,14 @@ Examples:
 ```text
 spawn scout and docs-scout in parallel for auth session refresh
 have worker implement the questionnaire validation fix
-send this diff to reviewer, and if a claim needs proof use validator or bug-prover
+review this worker diff in the main thread, then validate any uncertain claim
 ask advisor whether this migration should be split before implementation
 ```
 
 Recommended pattern in practice:
-- `parallel`: `scout` + `docs-scout` for repo and docs recon
+- `parallel`: `scout` + `docs-scout` for repository and documentation recon
 - `chain`: `scout` → `planner` → `worker` for coherent implementation
-- `chain`: `worker` → `reviewer`, then optionally `validator` / `bug-prover`, then `worker` for a prove-before-fix loop
+- main thread: inspect the worker's review packet and diff, then dispatch `validator` or `bug-prover` only for claims needing proof
 - `single`: `advisor` for a focused second opinion on a hard decision, failing test loop, or high-risk change
 
 `advisor` is a higher-level entry point built on the same `single` / `parallel` / `chain` primitives, meant for capability routing and second opinions. `validator` and `bug-prover` support evidence-driven review: validate a claim first, then build the smallest repro only when needed.
@@ -143,7 +140,7 @@ Examples:
 /run-agent bug-prover create a minimal failing repro for the auth refresh bug
 /run-agent advisor sanity-check whether this migration should be split
 /run-agent worker implement the refactor we just planned
-/run-agent --scope project reviewer review the latest changes
+/run-agent --scope project ux-designer propose a focused redesign for the settings page
 ```
 
 If the chosen agent frontmatter sets `sessionStrategy: fork-at`, the command clones the current active path into a new session before running the agent. That keeps long implementation runs isolated in their own branch while preserving the original conversation.
@@ -165,6 +162,7 @@ Create agent prompt files in `~/.pi/agent/prompts/` or `.pi/prompts/` as markdow
 ---
 name: my-agent
 description: What this agent does
+family: scout
 tools: read, grep, find, ls
 model: anthropic/claude-haiku-4-5
 sessionStrategy: fork-at
@@ -177,20 +175,19 @@ System prompt for the agent.
 
 The package ships with these agents out of the box:
 
-| Agent | Purpose | Default model | Default reasoning level |
-|------|---------|---------------|-------------------------|
-| `scout` | Fast codebase recon | `openai/gpt-5.6-luna` | `low` |
-| `docs-scout` | Context7-first documentation lookup | `openai/gpt-5.6-luna` | `low` |
-| `planner` | Implementation planning | `anthropic/claude-opus-4-6` | `high` |
-| `worker` | General-purpose implementation | `cursor:composer-2.5` | — |
-| `reviewer` | Code review | `anthropic/claude-opus-4-6` | `high` |
-| `validator` | Validate or falsify a specific bug or behavior claim from code, tests, and commands | `anthropic/claude-opus-4-6` | `high` |
-| `bug-prover` | Create the smallest failing repro for a suspected bug | `anthropic/claude-opus-4-6` | `high` |
-| `advisor` | Focused second-opinion consult for tricky planning, implementation, or review decisions | `anthropic/claude-opus-4-6` | `high` |
-| `ux-designer` | Frontend UI design | `anthropic/claude-opus-4-6` | `high` |
+| Agent | Family | Purpose | Default model | Default reasoning level |
+|------|--------|---------|---------------|-------------------------|
+| `scout` | scout | Fast codebase recon | `openai/gpt-5.6-luna` | `low` |
+| `docs-scout` | scout | Context7-first documentation lookup | `openai/gpt-5.6-luna` | `low` |
+| `validator` | scout | Validate or falsify a specific bug or behavior claim from code, tests, and commands | `anthropic/claude-opus-4-6` | `high` |
+| `planner` | consult | Implementation planning | `anthropic/claude-opus-4-6` | `high` |
+| `advisor` | consult | Focused second-opinion consult for tricky planning, implementation, or review decisions | `anthropic/claude-opus-4-6` | `high` |
+| `ux-designer` | consult | Frontend UI design | `anthropic/claude-opus-4-6` | `high` |
+| `worker` | worker | General-purpose implementation | `cursor:composer-2.5` | — |
+| `bug-prover` | worker | Create the smallest failing repro for a suspected bug | `anthropic/claude-opus-4-6` | `high` |
 
 Notes:
-- `worker`, `reviewer`, and `bug-prover` default to `sessionStrategy: fork-at`.
+- `worker` and `bug-prover` default to `sessionStrategy: fork-at`.
 - "Default reasoning level" maps to the frontmatter field `thinking` and can be overridden per run.
 
 Resolution order is: bundled → user (`~/.pi/agent/prompts/`) → project (`.pi/prompts/`). Project agents override user and bundled agents by name.
@@ -204,6 +201,7 @@ To scaffold a new project-local agent, run:
 This creates `.pi/prompts/<name>.md` with frontmatter and a starter system prompt. The bundled `write-an-agent` skill helps write or tighten agent definitions (sharp role, tool policy, output contract, under 100 lines).
 
 Optional frontmatter:
+- `family: scout | consult | worker` — routing metadata shown by `list_agents`; omit it to leave an agent ungrouped
 - `thinking` — default reasoning effort for the spawned pi process
 - `sessionStrategy: fork-at` — when used with `/run-agent`, clone the current active branch into a new session before running
 
@@ -220,4 +218,4 @@ This package intentionally does **not** ship canned workflow prompts.
 Prefer:
 - normal conversation that leads the main agent to call `subagent`
 - direct `/run-agent <agent> ...` for explicit single-agent runs
-- examples in this README and `docs/orchestration-principles.md` for common orchestration shapes
+- examples in this README for common orchestration shapes

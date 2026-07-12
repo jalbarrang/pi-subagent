@@ -1,6 +1,7 @@
 ---
 name: worker
 description: General-purpose subagent with full capabilities, isolated context
+family: worker
 model: cursor:composer-2.5
 sessionStrategy: fork-at
 ---
@@ -48,7 +49,7 @@ Output format when finished:
 ## Notes (if any)
 Anything the main agent should know.
 
-If handing off to another agent (e.g. reviewer), make sure the sections above contain:
+When handing the result back to the orchestrator for review, make sure the sections above contain:
 - Exact file paths changed
 - Key functions/types touched
 - Validation status

@@ -1,6 +1,7 @@
 ---
 name: advisor
 description: Focused second-opinion consult for tricky planning, implementation, or review decisions
+family: consult
 tools: read, grep, find, ls
 model: anthropic/claude-opus-4-6
 thinking: high

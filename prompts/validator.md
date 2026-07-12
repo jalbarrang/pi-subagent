@@ -1,6 +1,7 @@
 ---
 name: validator
 description: Validate or falsify a specific bug, regression, or behavior claim from code, tests, and commands. Use when a review finding needs evidence before it becomes a fix request.
+family: scout
 tools: read, grep, find, ls, bash
 model: anthropic/claude-opus-4-6
 thinking: high
@@ -38,5 +39,5 @@ Output format:
 - if none, say `- None.`
 
 ## Recommended Next Step
-- return to reviewer/worker
+- return to the orchestrator/worker
 - or ask `bug-prover` for a minimal failing repro if needed

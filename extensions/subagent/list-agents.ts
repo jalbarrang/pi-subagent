@@ -4,8 +4,31 @@
 
 import type { ExtensionAPI, ResolvedPaths } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
-import { type AgentScope, discoverAgents } from './agents.js';
+import {
+  type AgentConfig,
+  type AgentFamily,
+  type AgentScope,
+  discoverAgents,
+} from './agents.js';
 import { StringEnum } from '@earendil-works/pi-ai';
+
+const FAMILY_SECTIONS: Array<{ family: AgentFamily; heading: string }> = [
+  { family: 'scout', heading: 'Scouts' },
+  { family: 'consult', heading: 'Consults' },
+  { family: 'worker', heading: 'Workers' },
+];
+
+function appendAgent(lines: string[], agent: AgentConfig): void {
+  lines.push(`### ${agent.name}`);
+  lines.push(`- **Source**: ${agent.source}`);
+  lines.push(`- **Description**: ${agent.description}`);
+  if (agent.family) lines.push(`- **Family**: ${agent.family}`);
+  if (agent.model) lines.push(`- **Default model**: ${agent.model}`);
+  if (agent.thinking) lines.push(`- **Default thinking**: ${agent.thinking}`);
+  if (agent.tools) lines.push(`- **Tools**: ${agent.tools.join(', ')}`);
+  if (agent.sessionStrategy) lines.push(`- **Session strategy**: ${agent.sessionStrategy}`);
+  lines.push('');
+}
 
 export function registerListAgentsTool(
   pi: ExtensionAPI,
@@ -25,7 +48,7 @@ export function registerListAgentsTool(
     promptSnippet: 'List available subagent prompts to discover what agents can be spawned',
     promptGuidelines: [
       'Call list_agents before using the subagent tool when you are not certain which agents are available.',
-      'list_agents returns agent names, descriptions, sources, and capabilities.',
+      'list_agents groups prompts by scout, consult, and worker family and returns their sources and capabilities.',
     ],
     parameters: Type.Object({
       agentScope: Type.Optional(AgentScopeSchema),
@@ -56,15 +79,17 @@ export function registerListAgentsTool(
 
       const lines: string[] = [`Available agents (scope: ${agentScope}):`, ''];
 
-      for (const agent of discovery.agents) {
-        lines.push(`### ${agent.name}`);
-        lines.push(`- **Source**: ${agent.source}`);
-        lines.push(`- **Description**: ${agent.description}`);
-        if (agent.model) lines.push(`- **Default model**: ${agent.model}`);
-        if (agent.thinking) lines.push(`- **Default thinking**: ${agent.thinking}`);
-        if (agent.tools) lines.push(`- **Tools**: ${agent.tools.join(', ')}`);
-        if (agent.sessionStrategy) lines.push(`- **Session strategy**: ${agent.sessionStrategy}`);
-        lines.push('');
+      for (const section of FAMILY_SECTIONS) {
+        const agents = discovery.agents.filter((agent) => agent.family === section.family);
+        if (agents.length === 0) continue;
+        lines.push(`## ${section.heading}`, '');
+        for (const agent of agents) appendAgent(lines, agent);
+      }
+
+      const ungroupedAgents = discovery.agents.filter((agent) => !agent.family);
+      if (ungroupedAgents.length > 0) {
+        lines.push('## Ungrouped', '');
+        for (const agent of ungroupedAgents) appendAgent(lines, agent);
       }
 
       if (discovery.projectPromptsDir) {
@@ -78,6 +103,7 @@ export function registerListAgentsTool(
             name: a.name,
             description: a.description,
             source: a.source,
+            family: a.family,
             model: a.model,
             tools: a.tools,
           })),

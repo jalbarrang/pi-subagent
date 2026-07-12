@@ -579,6 +579,11 @@ export default function (pi: ExtensionAPI) {
     ].join(' '),
     promptGuidelines: [
       'If you are unsure which agents are available, call list_agents first before using the subagent tool.',
+      'Prefer one writer and many thinkers: scouts and consults produce handoffs; workers produce changes.',
+      'Use parallel mode for independent read-only discovery, never for competing or overlapping edits.',
+      'Use chain mode for ordered handoffs such as scout → planner → worker.',
+      'Review worker diffs in the main thread; use validator for exact uncertain claims and bug-prover only when proof needs a new artifact.',
+      'Keep handoffs compact and structured instead of returning raw agent logs.',
       'Use /create-agent to scaffold new project-local agent prompts when the user needs a custom agent.',
     ],
     parameters: SubagentParams,

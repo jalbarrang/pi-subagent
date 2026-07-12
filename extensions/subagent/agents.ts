@@ -14,10 +14,12 @@ import type { ResolvedPaths } from '@earendil-works/pi-coding-agent';
 export type AgentScope = 'user' | 'project' | 'both';
 export type AgentSource = 'user' | 'project' | 'package';
 export type AgentSessionStrategy = 'inline' | 'fork-at';
+export type AgentFamily = 'scout' | 'consult' | 'worker';
 
 export interface AgentConfig {
   name: string;
   description: string;
+  family?: AgentFamily;
   tools?: string[];
   model?: string;
   thinking?: string;
@@ -36,6 +38,15 @@ function parseSessionStrategy(value?: string): AgentSessionStrategy | undefined 
   if (!value) return undefined;
   const normalized = value.trim().toLowerCase();
   if (normalized === 'inline' || normalized === 'fork-at') return normalized;
+  return undefined;
+}
+
+function parseAgentFamily(value?: string): AgentFamily | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'scout' || normalized === 'consult' || normalized === 'worker') {
+    return normalized;
+  }
   return undefined;
 }
 
@@ -79,6 +90,7 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
     agents.push({
       name: frontmatter.name,
       description: frontmatter.description,
+      family: parseAgentFamily(frontmatter.family),
       tools: tools && tools.length > 0 ? tools : undefined,
       model: frontmatter.model,
       thinking: frontmatter.thinking,
@@ -149,6 +161,7 @@ function loadAgentFromFile(filePath: string, source: AgentSource): AgentConfig |
   return {
     name: frontmatter.name,
     description: frontmatter.description,
+    family: parseAgentFamily(frontmatter.family),
     tools: tools && tools.length > 0 ? tools : undefined,
     model: frontmatter.model,
     thinking: frontmatter.thinking,
