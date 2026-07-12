@@ -1,5 +1,12 @@
 # @dreki-gg/pi-subagent
 
+## [0.13.0](https://github.com/jalbarrang/pi-subagent/compare/v0.12.0...v0.13.0) (2026-07-12)
+
+
+### Features
+
+* update prompts ([d8a0597](https://github.com/jalbarrang/pi-subagent/commit/d8a05971d5cf840fa7ac7e02ad4871d9bde3f2ea))
+
 ## [0.12.0](https://github.com/jalbarrang/pi-subagent/compare/v0.11.3...v0.12.0) (2026-07-12)
 
 
