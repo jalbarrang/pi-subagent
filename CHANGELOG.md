@@ -1,5 +1,12 @@
 # @dreki-gg/pi-subagent
 
+## [0.14.0](https://github.com/jalbarrang/pi-subagent/compare/v0.13.0...v0.14.0) (2026-07-19)
+
+
+### Features
+
+* add reviewed workflow RPC bridge ([e41b9cb](https://github.com/jalbarrang/pi-subagent/commit/e41b9cb5390335fca03813120aa05558337a1eff))
+
 ## [0.13.0](https://github.com/jalbarrang/pi-subagent/compare/v0.12.0...v0.13.0) (2026-07-12)
 
 
