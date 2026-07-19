@@ -1,5 +1,12 @@
 # @dreki-gg/pi-subagent
 
+## [0.14.1](https://github.com/jalbarrang/pi-subagent/compare/v0.14.0...v0.14.1) (2026-07-19)
+
+
+### Bug Fixes
+
+* **cursor:** fail cleanly when cursor-agent is not installed ([884d98d](https://github.com/jalbarrang/pi-subagent/commit/884d98df8b36610a4d109e0a09d143f6e2cb616a))
+
 ## [0.14.0](https://github.com/jalbarrang/pi-subagent/compare/v0.13.0...v0.14.0) (2026-07-19)
 
 
