@@ -47,6 +47,7 @@ import { emptyUsage, spawnPiAgent, type ToolExecutionStartEvent } from './spawn-
 import { dispatchSubagent } from './cursor/dispatch.js';
 import { registerListAgentsTool } from './list-agents.js';
 import { registerCreateAgentCommand } from './create-agent.js';
+import { registerWorkflowRpc } from './workflow-rpc.js';
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -474,6 +475,8 @@ async function resolvePackagePaths(cwd: string): Promise<ResolvedPaths | undefin
 
 export default function (pi: ExtensionAPI) {
   let autocompleteCwd = process.cwd();
+
+  registerWorkflowRpc(pi);
 
   function parseArgumentText(argumentText: string): {
     completedTokens: string[];

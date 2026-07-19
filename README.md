@@ -30,6 +30,10 @@ Notes:
 
 The `list_agents` tool lets the model discover available agents (names, descriptions, sources, capabilities) before spawning. It takes an optional `agentScope` (`user` | `project` | `both`, default `user`).
 
+### Workflow Bridge
+
+Extensions can launch a reviewed declarative workflow through the process-local `subagents:rpc:v1:*` event bridge. The bridge accepts bounded sequential steps, static parallel phases, and bounded JSON fan-out; it tracks background runs by `wf_` ID and supports `ping`, `spawn`, `status`, `stop`, and restart-as-`resume`. It does not expose a second LLM-facing execution tool: callers are expected to put their own review and approval boundary in front of `spawn`.
+
 ## Cursor Composer (ACP backend)
 
 Set a subagent's model to `cursor:<model>` to run the task on Cursor's agent via the
