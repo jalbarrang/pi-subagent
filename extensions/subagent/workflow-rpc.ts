@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { getFinalText } from './agent-result-utils.js';
 import { runAgent } from './agent-runner.js';
+import { resolvePackagePaths } from './package-paths.js';
 import type { AgentScope } from './agents.js';
 
 export const SUBAGENT_RPC_REQUEST_EVENT = 'subagents:rpc:v1:request';
@@ -203,6 +204,9 @@ async function runAgentStep(
     model: step.model,
     thinking: step.thinking,
     signal,
+    // Without resolved package paths, discovery only sees user/project prompt
+    // dirs and every package-provided agent fails with "Unknown agent".
+    resolvedPaths: await resolvePackagePaths(ctx.cwd),
   });
   if (result.exitCode !== 0) {
     throw new Error(result.errorMessage ?? result.stderr ?? `Agent "${step.agent}" failed.`);

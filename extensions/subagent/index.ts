@@ -20,13 +20,9 @@ import {
   type ExtensionAPI,
   type ExtensionCommandContext,
   AuthStorage,
-  DefaultPackageManager,
-  getAgentDir,
   getMarkdownTheme,
   ModelRegistry,
-  SettingsManager,
 } from '@earendil-works/pi-coding-agent';
-import type { ResolvedPaths } from '@earendil-works/pi-coding-agent';
 import {
   Box,
   Container,
@@ -48,6 +44,7 @@ import { dispatchSubagent } from './cursor/dispatch.js';
 import { registerListAgentsTool } from './list-agents.js';
 import { registerCreateAgentCommand } from './create-agent.js';
 import { registerWorkflowRpc } from './workflow-rpc.js';
+import { resolvePackagePaths } from './package-paths.js';
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -462,16 +459,6 @@ const SubagentParams = Type.Object({
   ),
 });
 
-async function resolvePackagePaths(cwd: string): Promise<ResolvedPaths | undefined> {
-  try {
-    const agentDir = getAgentDir();
-    const settingsManager = SettingsManager.create(cwd, agentDir);
-    const packageManager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
-    return await packageManager.resolve();
-  } catch {
-    return undefined;
-  }
-}
 
 export default function (pi: ExtensionAPI) {
   let autocompleteCwd = process.cwd();
