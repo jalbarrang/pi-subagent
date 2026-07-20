@@ -52,13 +52,22 @@ export interface WorkflowDefinition {
   chain: WorkflowStep[];
 }
 
+interface WorkflowPhase {
+  label: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  output?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  agents?: { done: number; total: number };
+}
+
 interface WorkflowRun {
   id: string;
   workflow: WorkflowDefinition;
   status: 'running' | 'completed' | 'failed' | 'stopped';
   startedAt: string;
   finishedAt?: string;
-  phases: Array<{ label: string; status: 'pending' | 'running' | 'completed' | 'failed'; output?: string }>;
+  phases: WorkflowPhase[];
   error?: string;
   controller: AbortController;
 }
@@ -68,6 +77,33 @@ interface RpcRequest {
   requestId: string;
   method: 'ping' | 'spawn' | 'status' | 'stop' | 'resume';
   params?: { workflow?: WorkflowDefinition; id?: string };
+}
+
+export interface WorkflowRunSnapshot {
+  id: string;
+  status: WorkflowRun['status'];
+  startedAt: string;
+  finishedAt?: string;
+  error?: string;
+  phases: WorkflowPhase[];
+}
+
+export function toSnapshot(run: WorkflowRun): WorkflowRunSnapshot {
+  return {
+    id: run.id,
+    status: run.status,
+    startedAt: run.startedAt,
+    ...(run.finishedAt === undefined ? {} : { finishedAt: run.finishedAt }),
+    ...(run.error === undefined ? {} : { error: run.error }),
+    phases: run.phases.map((phase) => ({
+      label: phase.label,
+      status: phase.status,
+      ...(phase.output === undefined ? {} : { output: phase.output }),
+      ...(phase.startedAt === undefined ? {} : { startedAt: phase.startedAt }),
+      ...(phase.finishedAt === undefined ? {} : { finishedAt: phase.finishedAt }),
+      ...(phase.agents === undefined ? {} : { agents: { ...phase.agents } }),
+    })),
+  };
 }
 
 function rpcBus(pi: ExtensionAPI): RpcBus | undefined {
@@ -92,6 +128,14 @@ function pathValue(value: unknown, pointer: string): unknown {
       if (current === null || typeof current !== 'object') return undefined;
       return (current as Record<string, unknown>)[part.replace(/~1/g, '/').replace(/~0/g, '~')];
     }, value);
+}
+
+function decodedOutput(output: string): unknown {
+  try {
+    return JSON.parse(output);
+  } catch {
+    return output;
+  }
 }
 
 function template(task: string, workflowTask: string, previous: string, outputs: Record<string, unknown>, item?: unknown): string {
@@ -166,7 +210,11 @@ async function runAgentStep(
   return getFinalText(result);
 }
 
-async function executeRun(run: WorkflowRun, ctx: ExtensionContext): Promise<void> {
+export interface WorkflowRpcOptions {
+  runStep?: typeof runAgentStep;
+}
+
+async function executeRun(run: WorkflowRun, ctx: ExtensionContext, runStep = runAgentStep): Promise<void> {
   const outputs: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   let previous = '';
   try {
@@ -174,30 +222,36 @@ async function executeRun(run: WorkflowRun, ctx: ExtensionContext): Promise<void
       const step = run.workflow.chain[index]!;
       const phase = run.phases[index]!;
       phase.status = 'running';
+      phase.startedAt = new Date().toISOString();
 
       if (isAgentStep(step)) {
-        previous = await runAgentStep(
+        phase.agents = { done: 0, total: 1 };
+        previous = await runStep(
           ctx,
           run.workflow,
           step,
           template(step.task, run.workflow.task, previous, outputs),
           run.controller.signal,
         );
-        if (step.as) outputs[step.as] = previous;
+        phase.agents.done += 1;
+        if (step.as) outputs[step.as] = decodedOutput(previous);
       } else if (isParallelStep(step)) {
-        const output = await mapWithConcurrency(step.parallel, step.concurrency ?? 4, async (child) =>
-          runAgentStep(
+        phase.agents = { done: 0, total: step.parallel.length };
+        const output = await mapWithConcurrency(step.parallel, step.concurrency ?? 4, async (child) => {
+          const result = await runStep(
             ctx,
             run.workflow,
             child,
             template(child.task, run.workflow.task, previous, outputs),
             run.controller.signal,
-          ),
-        );
+          );
+          phase.agents!.done += 1;
+          return result;
+        });
         previous = JSON.stringify(output);
         for (let childIndex = 0; childIndex < step.parallel.length; childIndex++) {
           const child = step.parallel[childIndex]!;
-          if (child.as) outputs[child.as] = output[childIndex]!;
+          if (child.as) outputs[child.as] = decodedOutput(output[childIndex]!);
         }
       } else {
         const source = outputs[step.expand.from];
@@ -208,28 +262,35 @@ async function executeRun(run: WorkflowRun, ctx: ExtensionContext): Promise<void
         if (items.length > step.expand.maxItems) {
           throw new Error(`Fan-out exceeded maxItems (${items.length}/${step.expand.maxItems}).`);
         }
-        const output = await mapWithConcurrency(items, step.concurrency ?? 4, async (item) =>
-          runAgentStep(
+        phase.agents = { done: 0, total: items.length };
+        const output = await mapWithConcurrency(items, step.concurrency ?? 4, async (item) => {
+          const result = await runStep(
             ctx,
             run.workflow,
             step.parallel,
             template(step.parallel.task, run.workflow.task, previous, outputs, item),
             run.controller.signal,
-          ),
-        );
+          );
+          phase.agents!.done += 1;
+          return result;
+        });
         outputs[step.collect.as] = output;
         previous = JSON.stringify(output);
       }
 
       phase.output = previous;
       phase.status = 'completed';
+      phase.finishedAt = new Date().toISOString();
     }
     run.status = 'completed';
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     run.error = message;
     const active = run.phases.find((phase) => phase.status === 'running');
-    if (active) active.status = 'failed';
+    if (active) {
+      active.status = 'failed';
+      active.finishedAt = new Date().toISOString();
+    }
     run.status = run.controller.signal.aborted ? 'stopped' : 'failed';
   } finally {
     run.finishedAt = new Date().toISOString();
@@ -240,7 +301,7 @@ async function executeRun(run: WorkflowRun, ctx: ExtensionContext): Promise<void
  * Register the event bridge once in the parent Pi process. It provides
  * background `spawn`, inspectable `status`, stop, and restart-as-resume.
  */
-export function registerWorkflowRpc(pi: ExtensionAPI): void {
+export function registerWorkflowRpc(pi: ExtensionAPI, options: WorkflowRpcOptions = {}): void {
   const bus = rpcBus(pi);
   if (!bus) return;
 
@@ -272,7 +333,7 @@ export function registerWorkflowRpc(pi: ExtensionAPI): void {
     }
     if (request.method === 'status') {
       const run = request.params?.id ? runs.get(request.params.id) : undefined;
-      reply(true, run ?? Array.from(runs.values()));
+      reply(true, run ? toSnapshot(run) : Array.from(runs.values(), toSnapshot));
       return;
     }
     if (request.method === 'stop') {
@@ -310,8 +371,8 @@ export function registerWorkflowRpc(pi: ExtensionAPI): void {
         controller: new AbortController(),
       };
       runs.set(id, run);
-      void executeRun(run, activeContext);
-      reply(true, { id, status: run.status, phases: run.phases });
+      void executeRun(run, activeContext, options.runStep);
+      reply(true, toSnapshot(run));
       return;
     }
     reply(false, undefined, `Unsupported method "${request.method}".`);
