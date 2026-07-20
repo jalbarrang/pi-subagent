@@ -1,5 +1,12 @@
 # @dreki-gg/pi-subagent
 
+## [0.15.0](https://github.com/jalbarrang/pi-subagent/compare/v0.14.1...v0.15.0) (2026-07-20)
+
+
+### Features
+
+* **workflow:** expose phase progress snapshots ([ea0d6b1](https://github.com/jalbarrang/pi-subagent/commit/ea0d6b1c0a09c09421046fbb28e827dc4ddcbf5e))
+
 ## [0.14.1](https://github.com/jalbarrang/pi-subagent/compare/v0.14.0...v0.14.1) (2026-07-19)
 
 
