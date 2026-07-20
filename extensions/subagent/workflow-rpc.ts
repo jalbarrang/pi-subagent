@@ -6,6 +6,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { mkdir, rename, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { getFinalText } from './agent-result-utils.js';
 import { runAgent } from './agent-runner.js';
@@ -71,13 +73,15 @@ interface WorkflowRun {
   phases: WorkflowPhase[];
   error?: string;
   controller: AbortController;
+  runsDir?: string;
+  persistence?: { writing: boolean; queued: boolean };
 }
 
 interface RpcRequest {
   version: 1;
   requestId: string;
   method: 'ping' | 'spawn' | 'status' | 'stop' | 'resume';
-  params?: { workflow?: WorkflowDefinition; id?: string };
+  params?: { workflow?: WorkflowDefinition; id?: string; runsDir?: string };
 }
 
 export interface WorkflowRunSnapshot {
@@ -105,6 +109,39 @@ export function toSnapshot(run: WorkflowRun): WorkflowRunSnapshot {
       ...(phase.agents === undefined ? {} : { agents: { ...phase.agents } }),
     })),
   };
+}
+
+function persistRun(run: WorkflowRun): void {
+  if (!run.runsDir) return;
+
+  const persistence = (run.persistence ??= { writing: false, queued: false });
+  if (persistence.writing) {
+    persistence.queued = true;
+    return;
+  }
+
+  persistence.writing = true;
+  void (async () => {
+    do {
+      persistence.queued = false;
+      try {
+        const snapshot = {
+          ...toSnapshot(run),
+          workflow: { name: run.workflow.name, description: run.workflow.description },
+          updatedAt: new Date().toISOString(),
+        };
+        const runsDir = resolve(run.runsDir!);
+        const path = join(runsDir, `${run.id}.json`);
+        const temporaryPath = join(runsDir, `.${run.id}.${randomUUID()}.tmp`);
+        await mkdir(runsDir, { recursive: true });
+        await writeFile(temporaryPath, `${JSON.stringify(snapshot)}\n`, { mode: 0o600 });
+        await rename(temporaryPath, path);
+      } catch {
+        // Persistence is best-effort and must not affect workflow execution.
+      }
+    } while (persistence.queued);
+    persistence.writing = false;
+  })();
 }
 
 function rpcBus(pi: ExtensionAPI): RpcBus | undefined {
@@ -227,6 +264,7 @@ async function executeRun(run: WorkflowRun, ctx: ExtensionContext, runStep = run
       const phase = run.phases[index]!;
       phase.status = 'running';
       phase.startedAt = new Date().toISOString();
+      persistRun(run);
 
       if (isAgentStep(step)) {
         phase.agents = { done: 0, total: 1 };
@@ -238,6 +276,7 @@ async function executeRun(run: WorkflowRun, ctx: ExtensionContext, runStep = run
           run.controller.signal,
         );
         phase.agents.done += 1;
+        persistRun(run);
         if (step.as) outputs[step.as] = decodedOutput(previous);
       } else if (isParallelStep(step)) {
         phase.agents = { done: 0, total: step.parallel.length };
@@ -250,6 +289,7 @@ async function executeRun(run: WorkflowRun, ctx: ExtensionContext, runStep = run
             run.controller.signal,
           );
           phase.agents!.done += 1;
+          persistRun(run);
           return result;
         });
         previous = JSON.stringify(output);
@@ -276,6 +316,7 @@ async function executeRun(run: WorkflowRun, ctx: ExtensionContext, runStep = run
             run.controller.signal,
           );
           phase.agents!.done += 1;
+          persistRun(run);
           return result;
         });
         outputs[step.collect.as] = output;
@@ -285,6 +326,7 @@ async function executeRun(run: WorkflowRun, ctx: ExtensionContext, runStep = run
       phase.output = previous;
       phase.status = 'completed';
       phase.finishedAt = new Date().toISOString();
+      persistRun(run);
     }
     run.status = 'completed';
   } catch (error) {
@@ -294,10 +336,12 @@ async function executeRun(run: WorkflowRun, ctx: ExtensionContext, runStep = run
     if (active) {
       active.status = 'failed';
       active.finishedAt = new Date().toISOString();
+      persistRun(run);
     }
     run.status = run.controller.signal.aborted ? 'stopped' : 'failed';
   } finally {
     run.finishedAt = new Date().toISOString();
+    persistRun(run);
   }
 }
 
@@ -351,12 +395,8 @@ export function registerWorkflowRpc(pi: ExtensionAPI, options: WorkflowRpcOption
       return;
     }
     if (request.method === 'spawn' || request.method === 'resume') {
-      const workflow =
-        request.method === 'resume'
-          ? request.params?.id
-            ? runs.get(request.params.id)?.workflow
-            : undefined
-          : request.params?.workflow;
+      const resumedRun = request.method === 'resume' && request.params?.id ? runs.get(request.params.id) : undefined;
+      const workflow = request.method === 'resume' ? resumedRun?.workflow : request.params?.workflow;
       if (!workflow || !Array.isArray(workflow.chain) || workflow.chain.length === 0) {
         reply(false, undefined, 'A non-empty workflow chain is required.');
         return;
@@ -373,8 +413,10 @@ export function registerWorkflowRpc(pi: ExtensionAPI, options: WorkflowRpcOption
         startedAt: new Date().toISOString(),
         phases: workflow.chain.map((step, index) => ({ label: stepLabel(step, index), status: 'pending' })),
         controller: new AbortController(),
+        runsDir: request.params?.runsDir ?? resumedRun?.runsDir,
       };
       runs.set(id, run);
+      persistRun(run);
       void executeRun(run, activeContext, options.runStep);
       reply(true, toSnapshot(run));
       return;
