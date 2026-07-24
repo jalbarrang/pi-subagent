@@ -2,7 +2,8 @@
 name: worker
 description: General-purpose subagent with full capabilities, isolated context
 family: worker
-model: cursor:composer-2.5
+model: openai-codex/gpt-5.6-terra
+thinking: high
 sessionStrategy: fork-at
 ---
 
