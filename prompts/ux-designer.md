@@ -3,7 +3,7 @@ name: ux-designer
 description: Frontend UI designer that produces clean, human-designed interfaces — anti-Codex aesthetic
 family: consult
 tools: read, grep, find, ls
-model: anthropic/claude-opus-5
+model: openai-codex/gpt-5.6-sol
 thinking: high
 ---
 

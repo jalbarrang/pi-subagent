@@ -3,7 +3,7 @@ name: planner
 description: Creates implementation plans from context and requirements
 family: consult
 tools: read, grep, find, ls
-model: anthropic/claude-opus-5
+model: openai-codex/gpt-5.6-sol
 thinking: high
 ---
 
