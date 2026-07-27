@@ -1,5 +1,12 @@
 # @dreki-gg/pi-subagent
 
+## [0.16.1](https://github.com/jalbarrang/pi-subagent/compare/v0.16.0...v0.16.1) (2026-07-27)
+
+
+### Bug Fixes
+
+* prevent recursive subagent delegation ([cb06a8a](https://github.com/jalbarrang/pi-subagent/commit/cb06a8ab930c695651b89bb39d1e96b31480c67d))
+
 ## [0.16.0](https://github.com/jalbarrang/pi-subagent/compare/v0.15.1...v0.16.0) (2026-07-20)
 
 
