@@ -89,6 +89,7 @@ export async function runCursorAcpAgent(options: SpawnPiAgentOptions): Promise<S
 
   const proc = spawn(bin, ['--model', model, 'acp'], {
     cwd: options.cwd,
+    env: options.env ?? process.env,
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 

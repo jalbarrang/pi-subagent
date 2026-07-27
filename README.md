@@ -26,6 +26,14 @@ Notes:
 - `/run-agent` provides autocomplete for `--model` and `--thinking`
 - the `subagent` tool supports the same fields in its schema, but this package does not currently add custom interactive autocomplete for tool-call JSON parameters
 
+### Leaf Child Safety
+
+A spawned agent is a leaf. It cannot call `subagent`, start `workflow`, or use a compatibility `subagent_*` tool. Pi applies these exclusions after the agent's `tools` allowlist, so agent frontmatter cannot enable orchestration again.
+
+Pi-backed children still load other trusted extensions and tools. The child process receives `PI_AGENT_LEAF=1`. Packages can use this marker to prevent orchestration registration in descendants.
+
+Cursor ACP children receive the same marker. Pi tool exclusions do not control Cursor's native tools, so this package does not guarantee that Cursor-native delegation is unavailable.
+
 ### Agent Discovery
 
 The `list_agents` tool lets the model discover available agents (names, descriptions, sources, capabilities) before spawning. It takes an optional `agentScope` (`user` | `project` | `both`, default `user`).

@@ -45,6 +45,7 @@ import { registerListAgentsTool } from './list-agents.js';
 import { registerCreateAgentCommand } from './create-agent.js';
 import { registerWorkflowRpc } from './workflow-rpc.js';
 import { resolvePackagePaths } from './package-paths.js';
+import { isAgentLeafEnvironment } from './leaf-policy.js';
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -461,6 +462,8 @@ const SubagentParams = Type.Object({
 
 
 export default function (pi: ExtensionAPI) {
+  if (isAgentLeafEnvironment()) return;
+
   let autocompleteCwd = process.cwd();
 
   registerWorkflowRpc(pi);

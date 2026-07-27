@@ -10,6 +10,7 @@ import * as path from 'node:path';
 import { withFileMutationQueue } from '@earendil-works/pi-coding-agent';
 import type { Message } from '@earendil-works/pi-ai';
 import type { UsageStats } from './agent-runner-types.js';
+import { CHILD_ORCHESTRATION_TOOL_NAMES } from './leaf-policy.js';
 
 export function emptyUsage(): UsageStats {
   return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 };
@@ -78,6 +79,7 @@ export interface SpawnPiAgentOptions {
   model?: string;
   thinking?: string;
   tools?: string[];
+  env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   onMessage?: (msg: Message) => void;
   onToolResult?: (msg: Message) => void;
@@ -95,15 +97,21 @@ export interface SpawnPiAgentResult {
   errorMessage?: string;
 }
 
+export function buildPiAgentArgs(options: SpawnPiAgentOptions): string[] {
+  const args: string[] = ['--mode', 'json', '-p', '--no-session'];
+  if (options.model) args.push('--model', options.model);
+  if (options.thinking) args.push('--thinking', options.thinking);
+  if (options.tools && options.tools.length > 0) args.push('--tools', options.tools.join(','));
+  args.push('--exclude-tools', CHILD_ORCHESTRATION_TOOL_NAMES.join(','));
+  return args;
+}
+
 /**
  * Spawn a pi process for a subagent and collect results.
  * This is the shared core that both the tool and the /run-agent command use.
  */
 export async function spawnPiAgent(options: SpawnPiAgentOptions): Promise<SpawnPiAgentResult> {
-  const args: string[] = ['--mode', 'json', '-p', '--no-session'];
-  if (options.model) args.push('--model', options.model);
-  if (options.thinking) args.push('--thinking', options.thinking);
-  if (options.tools && options.tools.length > 0) args.push('--tools', options.tools.join(','));
+  const args = buildPiAgentArgs(options);
 
   let tmpPromptDir: string | null = null;
   let tmpPromptPath: string | null = null;
@@ -131,6 +139,7 @@ export async function spawnPiAgent(options: SpawnPiAgentOptions): Promise<SpawnP
       const needsShell = process.platform === 'win32' && invocation.command === 'pi';
       const proc = spawn(invocation.command, invocation.args, {
         cwd: options.cwd,
+        env: options.env ?? process.env,
         shell: needsShell,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
