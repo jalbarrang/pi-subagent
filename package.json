@@ -1,20 +1,36 @@
 {
   "name": "@dreki-gg/pi-subagent",
-  "version": "0.16.1",
+  "version": "0.17.0",
   "description": "Prompt-native isolated Pi subprocess execution for single, parallel, chain, and workflow runs",
-  "keywords": ["pi-package", "subagent", "orchestration"],
+  "keywords": [
+    "pi-package",
+    "subagent",
+    "orchestration"
+  ],
   "author": "Juan Albarran <jalbarrandev@gmail.com>",
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/jalbarrang/pi-subagent.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jalbarrang/pi-subagent.git"
+  },
   "type": "module",
-  "files": ["extensions/subagent", "README.md", "CHANGELOG.md", "LICENSE"],
+  "files": [
+    "extensions/subagent",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "oxlint extensions",
     "format": "oxfmt --write extensions test",
     "format:check": "oxfmt --check extensions test"
   },
-  "pi": { "extensions": ["./extensions/subagent"] },
+  "pi": {
+    "extensions": [
+      "./extensions/subagent"
+    ]
+  },
   "devDependencies": {
     "@types/node": "^26",
     "oxfmt": "^0.58.0",
@@ -34,10 +50,20 @@
     "typebox": "^1.0.55"
   },
   "peerDependenciesMeta": {
-    "@earendil-works/pi-ai": { "optional": true },
-    "@earendil-works/pi-agent-core": { "optional": true },
-    "@earendil-works/pi-coding-agent": { "optional": true },
-    "@earendil-works/pi-tui": { "optional": true },
-    "typebox": { "optional": true }
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-agent-core": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
   }
 }
