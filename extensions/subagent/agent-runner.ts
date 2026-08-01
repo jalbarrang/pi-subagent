@@ -1,93 +1,65 @@
-import type { ResolvedPaths } from '@earendil-works/pi-coding-agent';
-import { discoverAgents, type AgentScope } from './agents.js';
-import type { AgentResult } from './agent-runner-types.js';
-import { emptyUsage, type ToolExecutionStartEvent } from './spawn-utils.js';
-import { dispatchSubagent } from './cursor/dispatch.js';
+import type { PromptResult, PromptRun } from "./agent-runner-types.js";
+import { dispatchSubagent } from "./dispatch.js";
+import { emptyUsage, type ToolExecutionStartEvent } from "./spawn-utils.js";
 
-export type OnPhaseUpdate = (phaseName: string, agentName: string, result: AgentResult) => void;
+export type OnPhaseUpdate = (
+  phaseName: string,
+  label: string | undefined,
+  result: PromptResult,
+) => void;
 
-export interface RunAgentOptions {
-  agentScope?: AgentScope;
-  cwd?: string;
-  model?: string;
-  thinking?: string;
+export interface RunPromptOptions {
+  cwd: string;
   onUpdate?: OnPhaseUpdate;
   onToolExecutionStart?: (event: ToolExecutionStartEvent) => void;
   phaseName?: string;
   signal?: AbortSignal;
-  resolvedPaths?: ResolvedPaths;
 }
 
-export async function runAgent(
-  cwd: string,
-  agentName: string,
-  task: string,
-  options: RunAgentOptions = {},
-): Promise<AgentResult> {
-  const { agents } = discoverAgents(cwd, options.agentScope ?? 'user', options.resolvedPaths);
-  const agent = agents.find((a) => a.name === agentName);
-
-  if (!agent) {
-    const available = agents.map((a) => a.name).join(', ') || 'none';
-    return {
-      agent: agentName,
-      task,
-      exitCode: 1,
-      messages: [],
-      stderr: `Unknown agent: "${agentName}". Available: ${available}.`,
-      usage: emptyUsage(),
-    };
-  }
-
-  const selectedModel = options.model ?? agent.model;
-  const selectedThinking = options.thinking ?? agent.thinking;
-
-  const result: AgentResult = {
-    agent: agentName,
-    task,
+/** The one backend-neutral engine seam: a complete prompt plus explicit controls. */
+export async function runPrompt(run: PromptRun, options: RunPromptOptions): Promise<PromptResult> {
+  const result: PromptResult = {
+    label: run.label,
+    prompt: run.prompt,
     exitCode: 0,
     messages: [],
-    stderr: '',
+    stderr: "",
     usage: emptyUsage(),
-    model: selectedModel,
+    model: run.model,
   };
-
-  const spawnResult = await dispatchSubagent({
-    cwd: options.cwd ?? cwd,
-    agentName: agent.name,
-    task,
-    systemPrompt: agent.systemPrompt,
-    model: selectedModel,
-    thinking: selectedThinking,
-    tools: agent.tools,
+  let spawned: Awaited<ReturnType<typeof dispatchSubagent>> | undefined;
+  spawned = await dispatchSubagent({
+    cwd: run.cwd ?? options.cwd,
+    prompt: run.prompt,
+    label: run.label,
+    model: run.model,
+    thinking: run.thinking,
+    tools: run.tools,
     signal: options.signal,
-    onMessage: () => {
-      // Copy accumulated state for the phase update callback
-      if (options.onUpdate) {
-        result.messages = spawnResult.messages;
-        result.usage = spawnResult.usage;
-        result.model = spawnResult.model ?? result.model;
-        result.stopReason = spawnResult.stopReason;
-        result.errorMessage = spawnResult.errorMessage;
-        options.onUpdate(options.phaseName ?? 'unknown', agentName, { ...result });
+    onMessage: (message) => {
+      if (spawned) {
+        result.messages = spawned.messages;
+        result.usage = spawned.usage;
+        result.model = spawned.model ?? result.model;
+        result.stopReason = spawned.stopReason;
+        result.errorMessage = spawned.errorMessage;
+      } else {
+        result.messages = [...result.messages, message];
       }
+      options.onUpdate?.(options.phaseName ?? "unknown", run.label, { ...result });
     },
-    onToolResult: () => {
-      if (options.onUpdate) {
-        result.messages = spawnResult.messages;
-        options.onUpdate(options.phaseName ?? 'unknown', agentName, { ...result });
-      }
+    onToolResult: (message) => {
+      result.messages = spawned ? spawned.messages : [...result.messages, message];
+      options.onUpdate?.(options.phaseName ?? "unknown", run.label, { ...result });
     },
     onToolExecutionStart: options.onToolExecutionStart,
   });
-
-  result.exitCode = spawnResult.exitCode;
-  result.messages = spawnResult.messages;
-  result.stderr = spawnResult.stderr;
-  result.usage = spawnResult.usage;
-  result.model = spawnResult.model ?? result.model;
-  result.stopReason = spawnResult.stopReason;
-  result.errorMessage = spawnResult.errorMessage;
-
+  result.exitCode = spawned.exitCode;
+  result.messages = spawned.messages;
+  result.stderr = spawned.stderr;
+  result.usage = spawned.usage;
+  result.model = spawned.model ?? result.model;
+  result.stopReason = spawned.stopReason;
+  result.errorMessage = spawned.errorMessage;
   return result;
 }

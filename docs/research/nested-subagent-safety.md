@@ -1,5 +1,7 @@
 # Nested subagent safety research
 
+> Historical note: This document records the pre-engine-only architecture. The recommended strict-leaf invariant is now implemented in `extensions/subagent/dispatch.ts`, `extensions/subagent/leaf-policy.ts`, and `extensions/subagent/spawn-utils.ts`; bundled persona prompts and alternate backends have been removed.
+
 ## Question
 
 Can a subagent started from a normal user session call another subagent, and what refactor would prevent unsafe recursive agent spawning while preserving deliberate orchestration in `../pi-workflows`?
@@ -40,11 +42,6 @@ This is not a JavaScript call-stack recursion problem. Each level is a separate 
 - `../pi-workflows/extensions/workflows/__tests__/child-policy.test.ts` asserts the incomplete list exactly, so current tests preserve the gap rather than detecting cross-package composition.
 - The workflow script itself is separately bounded by a 32-call budget and concurrency four, but a child escape through `subagent` bypasses the workflow controller's budget, artifacts, required-gate semantics, timeouts, and progress accounting.
 
-### Cursor-backed subagents are a separate boundary
-
-- `extensions/subagent/cursor/dispatch.ts` routes `cursor:` models to `runCursorAcpAgent()` instead of `spawnPiAgent()`.
-- Cursor ACP starts its own agent with `mcpServers: []`; the Pi agent `tools` allowlist does not apply. A Pi `--exclude-tools` refactor therefore hardens Pi-backed children only. The Cursor backend needs an explicit documented support statement or a separate capability investigation; it must not be presented as covered by the Pi child policy.
-
 ## Recommended invariant
 
 Only the user-facing parent session or the reviewed workflow script may orchestrate agents. A spawned child is a leaf and must not receive `subagent` or `workflow`, regardless of its prompt frontmatter.
@@ -56,7 +53,7 @@ Enforce this at child creation, not in prompt text:
 3. Add a package-owned leaf-process environment marker as defense in depth and for diagnostics. Check it at the backend-neutral dispatcher and at both package extension composition roots so a marked child cannot register either orchestration surface. Do not treat the marker as a hostile-code sandbox because a bash-capable child can alter its environment.
 4. Update `pi-workflows` child policy to exclude the exact peer tool name `subagent` and add a composition regression test. Also update every test that locks the current exclusion list.
 5. Remove nested-consult instructions and `subagent` frontmatter from leaf agent prompts so prompts match the enforced capability boundary instead of repeatedly attempting a denied tool.
-6. State that Cursor ACP is outside the Pi-tool exclusion guarantee until separately proven. Pass the leaf marker into the Cursor process so descendant Pi launches still fail closed, but do not imply that this disables unknown Cursor-native delegation.
+6. Keep the package Pi-only so the leaf marker and Pi tool exclusion policy cover every supported child execution path.
 
 ## Options considered
 
@@ -91,8 +88,6 @@ This would centralize policies and lifecycle but couples the lightweight package
 - `extensions/subagent/spawn-utils.ts`
 - `extensions/subagent/index.ts`
 - `extensions/subagent/agent-runner.ts`
-- `extensions/subagent/cursor/dispatch.ts`
-- `extensions/subagent/cursor/acp-runner.ts`
 - `prompts/planner.md`
 - `prompts/worker.md`
 - `package.json`

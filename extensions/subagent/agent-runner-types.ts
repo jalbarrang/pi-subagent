@@ -1,4 +1,4 @@
-import type { Message } from '@earendil-works/pi-ai';
+import type { Message } from "@earendil-works/pi-ai";
 
 export interface UsageStats {
   input: number;
@@ -10,9 +10,9 @@ export interface UsageStats {
   turns: number;
 }
 
-export interface AgentResult {
-  agent: string;
-  task: string;
+export interface PromptResult {
+  label?: string;
+  prompt: string;
   exitCode: number;
   messages: Message[];
   stderr: string;
@@ -20,4 +20,14 @@ export interface AgentResult {
   model?: string;
   stopReason?: string;
   errorMessage?: string;
+  step?: number;
+}
+
+export interface PromptRun {
+  prompt: string;
+  label?: string;
+  cwd?: string;
+  model?: string;
+  thinking?: string;
+  tools?: string[];
 }

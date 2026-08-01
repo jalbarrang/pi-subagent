@@ -1,5 +1,14 @@
 # @dreki-gg/pi-subagent
 
+## Unreleased
+
+### ⚠ BREAKING CHANGES
+
+* Replace named-agent execution with prompt-native Pi subprocess runs.
+* Accept full `prompt` text with an optional inert `label` and explicit model, thinking, tools, and cwd controls.
+* Remove `list_agents`, `/create-agent`, `/run-agent`, agent scopes, project-agent confirmation, bundled prompts, the prompt-authoring skill, persona handoffs, and Cursor ACP support.
+* Move workflow RPC events from `subagents:rpc:v1:*` to `subagents:rpc:v2:*`. Workflow steps use `prompt` and optional `label`.
+
 ## [0.16.1](https://github.com/jalbarrang/pi-subagent/compare/v0.16.0...v0.16.1) (2026-07-27)
 
 
