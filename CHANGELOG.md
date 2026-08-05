@@ -9,6 +9,14 @@
 * Remove `list_agents`, `/create-agent`, `/run-agent`, agent scopes, project-agent confirmation, bundled prompts, the prompt-authoring skill, persona handoffs, and Cursor ACP support.
 * Move workflow RPC events from `subagents:rpc:v1:*` to `subagents:rpc:v2:*`. Workflow steps use `prompt` and optional `label`.
 
+## [0.18.0](https://github.com/jalbarrang/pi-subagent/compare/v0.17.0...v0.18.0) (2026-08-05)
+
+
+### Features
+
+* add context-isolated /btw side questions ([6c639fc](https://github.com/jalbarrang/pi-subagent/commit/6c639fc88f0d8ce89e5a5ad6e55460156868a417))
+* coordinate and bound subagent execution ([09cb3d5](https://github.com/jalbarrang/pi-subagent/commit/09cb3d52a4f759d18f17fcbce767e662f67af616))
+
 ## [0.17.0](https://github.com/jalbarrang/pi-subagent/compare/v0.16.1...v0.17.0) (2026-08-01)
 
 
