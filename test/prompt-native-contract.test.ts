@@ -78,6 +78,11 @@ describe("prompt-native contract", () => {
         registerTool(value: typeof tool) {
           tool = value;
         },
+        registerCommand() {},
+        registerEntryRenderer() {},
+        getThinkingLevel() {
+          return "high";
+        },
         events: { on() {}, emit() {} },
         on() {},
       } as never);
