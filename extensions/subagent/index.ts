@@ -9,8 +9,16 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { capPreviousOutput, getFinalText, getPromptError } from "./agent-result-utils.js";
+import {
+  capModelOutput,
+  capPreviousOutput,
+  getFinalText,
+  getPromptError,
+  MAX_PARALLEL_CHILD_OUTPUT_BYTES,
+  MAX_PARALLEL_CHILD_OUTPUT_LINES,
+} from "./agent-result-utils.js";
 import { runPrompt } from "./agent-runner.js";
+import { executionCoordinator, type ExecutionCoordinator } from "./execution-coordinator.js";
 import {
   createBtwFailureData,
   createBtwResultData,
@@ -20,11 +28,10 @@ import {
 import type { PromptResult, PromptRun, UsageStats } from "./agent-runner-types.js";
 import { emptyUsage } from "./spawn-utils.js";
 import { isAgentLeafEnvironment } from "./leaf-policy.js";
-import { registerWorkflowRpc } from "./workflow-rpc.js";
+import { registerWorkflowRpc, type WorkflowRpcOptions } from "./workflow-rpc.js";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
-const MAX_BTW_RUNS = 4;
 
 const PromptItem = Type.Object({
   prompt: Type.String({ description: "Complete prompt text for the isolated child" }),
@@ -79,6 +86,15 @@ function finalOutput(messages: Message[]): string {
   );
 }
 
+function presentModelOutput(output: string): string {
+  return capModelOutput(output).content;
+}
+
+function presentParallelOutput(output: string): string {
+  return capModelOutput(output, MAX_PARALLEL_CHILD_OUTPUT_BYTES, MAX_PARALLEL_CHILD_OUTPUT_LINES)
+    .content;
+}
+
 function formatUsage(usage: UsageStats, model?: string): string {
   const parts: string[] = [];
   if (usage.turns) parts.push(`${usage.turns} turn${usage.turns === 1 ? "" : "s"}`);
@@ -127,14 +143,20 @@ function displayLabel(result: PromptResult, fallback: string): string {
 
 export interface SubagentExtensionDependencies {
   runPrompt?: typeof runPrompt;
+  coordinator?: ExecutionCoordinator;
+  workflowRunStep?: WorkflowRpcOptions["runStep"];
 }
 
 export function registerSubagentExtension(
   pi: ExtensionAPI,
-  { runPrompt: promptRunner = runPrompt }: SubagentExtensionDependencies = {},
+  {
+    runPrompt: promptRunner = runPrompt,
+    coordinator = executionCoordinator,
+    workflowRunStep,
+  }: SubagentExtensionDependencies = {},
 ): void {
   if (isAgentLeafEnvironment()) return;
-  registerWorkflowRpc(pi);
+  registerWorkflowRpc(pi, { coordinator, runStep: workflowRunStep });
 
   let closed = false;
   let nextBtwId = 1;
@@ -190,8 +212,9 @@ export function registerSubagentExtension(
       const question =
         args.trim() || (await ctx.ui.input("by the way", "Ask a one-off question…"))?.trim();
       if (!question || closed) return;
-      if (activeBtwRuns.size >= MAX_BTW_RUNS) {
-        ctx.ui.notify(`Only ${MAX_BTW_RUNS} /btw questions can run at once.`, "warning");
+      const lease = coordinator.tryAcquire();
+      if (!lease) {
+        ctx.ui.notify("All subagent execution slots are busy. Try /btw again shortly.", "warning");
         return;
       }
 
@@ -206,15 +229,26 @@ export function registerSubagentExtension(
         model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
         thinking: pi.getThinkingLevel(),
       };
-      void promptRunner(run, { cwd: ctx.cwd, signal: controller.signal }).then(
-        (result) => settleBtw(id, ctx, createBtwResultData(id, title, result)),
-        (error: unknown) => settleBtw(id, ctx, createBtwFailureData(id, title, question, error)),
-      );
+      let task: Promise<PromptResult>;
+      try {
+        task = promptRunner(run, { cwd: ctx.cwd, signal: controller.signal, coordinator, lease });
+      } catch (error) {
+        settleBtw(id, ctx, createBtwFailureData(id, title, question, error));
+        lease.release();
+        return;
+      }
+      void task
+        .then(
+          (result) => settleBtw(id, ctx, createBtwResultData(id, title, result)),
+          (error: unknown) => settleBtw(id, ctx, createBtwFailureData(id, title, question, error)),
+        )
+        .finally(lease.release);
     },
   });
 
   pi.on("session_shutdown", () => {
     closed = true;
+    coordinator.rejectQueued();
     for (const controller of activeBtwRuns.values()) controller.abort();
     activeBtwRuns.clear();
   });
@@ -260,17 +294,29 @@ export function registerSubagentExtension(
         step: number | undefined,
         update?: OnUpdateCallback,
       ): Promise<PromptResult> => {
-        const result = await promptRunner(run, {
-          cwd: ctx.cwd,
-          signal,
-          phaseName: step === undefined ? "single" : `step-${step}`,
-          onUpdate: (_phase, _label, partial) =>
-            update?.({
-              content: [{ type: "text", text: finalOutput(partial.messages) || "(running...)" }],
-              details: details(mode, [{ ...partial, step }]),
-            }),
-        });
-        return { ...result, step };
+        const lease = await coordinator.acquire(signal);
+        try {
+          const result = await promptRunner(run, {
+            cwd: ctx.cwd,
+            signal,
+            phaseName: step === undefined ? "single" : `step-${step}`,
+            coordinator,
+            lease,
+            onUpdate: (_phase, _label, partial) =>
+              update?.({
+                content: [
+                  {
+                    type: "text",
+                    text: presentModelOutput(finalOutput(partial.messages) || "(running...)"),
+                  },
+                ],
+                details: details(mode, [{ ...partial, step }]),
+              }),
+          });
+          return { ...result, step };
+        } finally {
+          lease.release();
+        }
       };
 
       if (hasSingle) {
@@ -279,64 +325,74 @@ export function registerSubagentExtension(
           ctx.ui.setWorkingMessage(
             `Running ${run.label ?? "subagent"}${run.model ? ` · ${run.model}` : ""}`,
           );
-        const result = await runOne(run, undefined, onUpdate);
-        if (ctx.hasUI) ctx.ui.setWorkingMessage();
-        const error = getPromptError(result);
-        return {
-          content: [
-            {
-              type: "text",
-              text: error ? `Subagent failed: ${error}` : finalOutput(result.messages),
-            },
-          ],
-          details: details("single", [result]),
-        };
+        try {
+          const result = await runOne(run, undefined, onUpdate);
+          const error = getPromptError(result);
+          return {
+            content: [
+              {
+                type: "text",
+                text: presentModelOutput(
+                  error ? `Subagent failed: ${error}` : finalOutput(result.messages),
+                ),
+              },
+            ],
+            details: details("single", [result]),
+          };
+        } finally {
+          if (ctx.hasUI) ctx.ui.setWorkingMessage();
+        }
       }
 
       if (hasChain) {
         const results: PromptResult[] = [];
         let previous = "";
-        for (const [index, item] of params.chain!.entries()) {
-          const run = mergeRun(
-            { ...item, prompt: item.prompt.replace(/\{previous\}/g, previous) },
-            defaults,
-          );
-          if (ctx.hasUI)
-            ctx.ui.setWorkingMessage(
-              `Chain ${index + 1}/${params.chain!.length}: ${run.label ?? "subagent"}${run.model ? ` · ${run.model}` : ""}`,
+        try {
+          for (const [index, item] of params.chain!.entries()) {
+            const run = mergeRun(
+              { ...item, prompt: item.prompt.replace(/\{previous\}/g, previous) },
+              defaults,
             );
-          const result = await runOne(
-            run,
-            index + 1,
-            onUpdate
-              ? (partial) =>
-                  onUpdate({
-                    content: partial.content,
-                    details: details("chain", [...results, ...partial.details!.results]),
-                  })
-              : undefined,
-          );
-          results.push(result);
-          const error = getPromptError(result);
-          if (error) {
-            if (ctx.hasUI) ctx.ui.setWorkingMessage();
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Chain stopped at step ${index + 1} (${displayLabel(result, "subagent")}): ${error}`,
-                },
-              ],
-              details: details("chain", results),
-            };
+            if (ctx.hasUI)
+              ctx.ui.setWorkingMessage(
+                `Chain ${index + 1}/${params.chain!.length}: ${run.label ?? "subagent"}${run.model ? ` · ${run.model}` : ""}`,
+              );
+            const result = await runOne(
+              run,
+              index + 1,
+              onUpdate
+                ? (partial) =>
+                    onUpdate({
+                      content: partial.content,
+                      details: details("chain", [...results, ...partial.details!.results]),
+                    })
+                : undefined,
+            );
+            results.push(result);
+            const error = getPromptError(result);
+            if (error)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: presentModelOutput(
+                      `Chain stopped at step ${index + 1} (${displayLabel(result, "subagent")}): ${error}`,
+                    ),
+                  },
+                ],
+                details: details("chain", results),
+              };
+            previous = capPreviousOutput(finalOutput(result.messages));
           }
-          previous = capPreviousOutput(finalOutput(result.messages));
+          return {
+            content: [
+              { type: "text", text: presentModelOutput(finalOutput(results.at(-1)!.messages)) },
+            ],
+            details: details("chain", results),
+          };
+        } finally {
+          if (ctx.hasUI) ctx.ui.setWorkingMessage();
         }
-        if (ctx.hasUI) ctx.ui.setWorkingMessage();
-        return {
-          content: [{ type: "text", text: finalOutput(results.at(-1)!.messages) }],
-          details: details("chain", results),
-        };
       }
 
       const taskItems = params.tasks!;
@@ -364,32 +420,37 @@ export function registerSubagentExtension(
           details: details("parallel", [...running]),
         });
       if (ctx.hasUI) ctx.ui.setWorkingMessage(`Running ${taskItems.length} prompts in parallel`);
-      const results = await mapWithConcurrencyLimit(taskItems, async (item, index) => {
-        const result = await runOne(mergeRun(item, defaults), undefined, (partial) => {
-          running[index] = partial.details!.results[0]!;
+      try {
+        const results = await mapWithConcurrencyLimit(taskItems, async (item, index) => {
+          const result = await runOne(mergeRun(item, defaults), undefined, (partial) => {
+            running[index] = partial.details!.results[0]!;
+            emitProgress();
+          });
+          running[index] = result;
           emitProgress();
+          return result;
         });
-        running[index] = result;
-        emitProgress();
-        return result;
-      });
-      if (ctx.hasUI) ctx.ui.setWorkingMessage();
-      const successCount = results.filter((result) => !getPromptError(result)).length;
-      const summary = results
-        .map(
-          (result, index) =>
-            `[${displayLabel(result, `prompt-${index + 1}`)}] ${getPromptError(result) ? "failed" : "completed"}: ${getPromptError(result) ?? finalOutput(result.messages)}`,
-        )
-        .join("\n\n");
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Parallel: ${successCount}/${results.length} succeeded\n\n${summary}`,
-          },
-        ],
-        details: details("parallel", results),
-      };
+        const successCount = results.filter((result) => !getPromptError(result)).length;
+        const summary = results
+          .map(
+            (result, index) =>
+              `[${displayLabel(result, `prompt-${index + 1}`)}] ${getPromptError(result) ? "failed" : "completed"}: ${presentParallelOutput(getPromptError(result) ?? finalOutput(result.messages))}`,
+          )
+          .join("\n\n");
+        return {
+          content: [
+            {
+              type: "text",
+              text: presentModelOutput(
+                `Parallel: ${successCount}/${results.length} succeeded\n\n${summary}`,
+              ),
+            },
+          ],
+          details: details("parallel", results),
+        };
+      } finally {
+        if (ctx.hasUI) ctx.ui.setWorkingMessage();
+      }
     },
     renderCall(args, theme) {
       const items = args.chain ?? args.tasks;

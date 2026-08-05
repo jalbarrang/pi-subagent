@@ -7,6 +7,7 @@ import {
   capBtwOutput,
   deriveBtwTitle,
 } from "../extensions/subagent/by-the-way.js";
+import { ExecutionCoordinator } from "../extensions/subagent/execution-coordinator.js";
 import { registerSubagentExtension } from "../extensions/subagent/index.js";
 
 type Deferred<T> = { promise: Promise<T>; resolve(value: T): void; reject(error: unknown): void };
@@ -82,7 +83,7 @@ function createHarness(promptRunner: PromptRunner) {
         throw new Error("/btw must not send a parent-model message");
       },
     } as never,
-    { runPrompt: promptRunner as never },
+    { runPrompt: promptRunner as never, coordinator: new ExecutionCoordinator() },
   );
   const command = commands.get("btw");
   if (!command) throw new Error("/btw was not registered");
@@ -222,7 +223,10 @@ describe("/btw command", () => {
     await harness.command.handler("fifth", harness.context);
     expect(calls).toBe(4);
     expect(harness.notifications).toEqual([
-      { message: "Only 4 /btw questions can run at once.", type: "warning" },
+      {
+        message: "All subagent execution slots are busy. Try /btw again shortly.",
+        type: "warning",
+      },
     ]);
 
     children[0]!.resolve(promptResult("question 0"));

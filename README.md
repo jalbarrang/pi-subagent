@@ -31,7 +31,7 @@ The only LLM-facing surface is the prompt-native `subagent` tool. It does not di
 - Parallel: `{ tasks: [{ prompt, label?, model?, thinking?, tools?, cwd? }], model?, thinking?, tools?, cwd? }`
 - Chain: `{ chain: [{ prompt, label?, model?, thinking?, tools?, cwd? }], model?, thinking?, tools?, cwd? }`
 
-Child item controls override call-level defaults. Every prompt must be non-empty. Parallel runs support at most eight items and execute at most four at a time. An explicit empty `tools` array disables all child tools.
+Child item controls override call-level defaults. Every prompt must be non-empty. Parallel runs support at most eight items. Direct tool runs and workflow children share one process-wide four-child execution limit and wait for capacity when necessary. An explicit empty `tools` array disables all child tools.
 
 A chain replaces each `{previous}` occurrence with the preceding child's final raw text. The engine does not parse or format that output. To bound context growth, it caps it at 64 KiB and appends `[previous output truncated by pi-subagent]` when truncation occurs.
 
@@ -41,7 +41,9 @@ Pi children run in JSON print mode with no persisted session and `--no-prompt-te
 
 Spawned children are leaves. They receive `PI_AGENT_LEAF=1`, do not register this extension, and cannot delegate again. Other trusted Pi context files, skills, and extensions remain Pi-controlled child resources.
 
-Progress, final output, usage, cancellation, and child errors are rendered in the parent tool result.
+Progress, final output, and child errors returned to the parent model are capped at 48 KiB or 600 lines with `[output truncated by pi-subagent]` when necessary. Parallel summaries also cap each child at 12 KiB or 160 lines. Full child result details remain available to renderers. Usage, cancellation, and child errors are rendered in the parent tool result.
+
+Cancellation first requests graceful tree termination, then forces remaining descendants after five seconds. POSIX children run in a dedicated process group. Windows uses `taskkill /T` for the process tree. `/btw` shares the same four-child limit but rejects immediately when all slots are occupied.
 
 ## Workflow RPC bridge
 
@@ -67,7 +69,7 @@ Workflow steps are prompt-native:
 }
 ```
 
-Workflow prompt steps support `prompt`, optional inert `label`, `as`, `model`, `thinking`, `tools`, and `cwd`. Workflow templates preserve `{task}`, `{previous}`, `{outputs.name}`, and fan-out item placeholders. `{previous}` uses the same neutral 64 KiB cap as tool chains, and workflow parallelism is limited to four child runs.
+Workflow prompt steps support `prompt`, optional inert `label`, `as`, `model`, `thinking`, `tools`, and `cwd`. Workflow templates preserve `{task}`, `{previous}`, `{outputs.name}`, and fan-out item placeholders. `{previous}` uses the same neutral 64 KiB cap as tool chains, and workflow parallelism is limited to four child runs. Workflow children share the same process-wide four-child execution limit as direct tool runs and `/btw`. RPC snapshots cap aggregate phase output and error text at 48 KiB or 600 lines; raw values remain available only inside the workflow for chaining.
 
 ## Breaking migration
 

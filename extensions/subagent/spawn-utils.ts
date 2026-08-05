@@ -1,6 +1,6 @@
 /** Shared utilities for spawning isolated prompt-native Pi subprocesses. */
 
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
@@ -42,6 +42,10 @@ export interface SpawnPiAgentOptions {
   onMessage?: (msg: Message) => void;
   onToolResult?: (msg: Message) => void;
   onToolExecutionStart?: (event: ToolExecutionStartEvent) => void;
+  /** Injectable only for lifecycle tests. */
+  terminationGraceMs?: number;
+  /** Injectable only for lifecycle tests. */
+  terminationForceWaitMs?: number;
 }
 
 export interface SpawnPiAgentResult {
@@ -53,6 +57,175 @@ export interface SpawnPiAgentResult {
   model?: string;
   stopReason?: string;
   errorMessage?: string;
+}
+
+export const PROCESS_TREE_GRACE_MS = 5_000;
+export const PROCESS_TREE_FORCE_WAIT_MS = 5_000;
+const PROCESS_TREE_POLL_MS = 25;
+
+export interface TerminateProcessTreeOptions {
+  /** Tests can inject a short grace period; production keeps the five-second default. */
+  graceMs?: number;
+  /** Tests can inject a short forced-exit deadline; production remains bounded at five seconds. */
+  forceWaitMs?: number;
+  platform?: NodeJS.Platform;
+}
+
+export function processTreeKillCommand(
+  pid: number,
+  force: boolean,
+  platform = process.platform,
+): { command: string; args: string[] } | undefined {
+  if (!Number.isInteger(pid) || pid <= 0) return undefined;
+  if (platform === "win32")
+    return { command: "taskkill", args: ["/pid", String(pid), "/t", ...(force ? ["/f"] : [])] };
+  return undefined;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    if ((error as NodeJS.ErrnoException).code === "EPERM") return true;
+    throw error;
+  }
+}
+
+function isPosixProcessGroupAlive(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    if ((error as NodeJS.ErrnoException).code === "EPERM") return true;
+    throw error;
+  }
+}
+
+function signalPosixProcessGroup(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-pid, signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
+}
+
+async function waitForExit(isAlive: () => boolean, timeoutMs?: number): Promise<boolean> {
+  const deadline = timeoutMs === undefined ? undefined : Date.now() + timeoutMs;
+  while (isAlive()) {
+    if (deadline !== undefined && Date.now() >= deadline) return false;
+    await sleep(
+      deadline === undefined
+        ? PROCESS_TREE_POLL_MS
+        : Math.max(1, Math.min(PROCESS_TREE_POLL_MS, deadline - Date.now())),
+    );
+  }
+  return true;
+}
+
+async function runTaskkill(pid: number, force: boolean, timeoutMs: number): Promise<void> {
+  const command = processTreeKillCommand(pid, force, "win32");
+  if (!command) return;
+  await new Promise<void>((resolve, reject) => {
+    let stderr = "";
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settle = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (error) reject(error);
+      else resolve();
+    };
+    let killer: ChildProcess;
+    try {
+      killer = spawn(command.command, command.args, {
+        stdio: ["ignore", "ignore", "pipe"],
+        windowsHide: true,
+      });
+    } catch (error) {
+      settle(error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
+    timer = setTimeout(
+      () => {
+        try {
+          killer.kill();
+        } catch {
+          // The timeout failure below is the actionable termination error.
+        }
+        settle(
+          new Error(
+            `taskkill ${force ? "/T /F" : "/T"} timed out for process ${pid} after ${timeoutMs}ms.`,
+          ),
+        );
+      },
+      Math.max(1, timeoutMs),
+    );
+    killer.stderr?.on("data", (data: Buffer) => {
+      stderr += data.toString();
+    });
+    killer.once("error", (error) => settle(error));
+    killer.once("close", (code) => {
+      if (code === 0) settle();
+      else
+        settle(
+          new Error(
+            `taskkill ${force ? "/T /F" : "/T"} failed for process ${pid}${stderr ? `: ${stderr.trim()}` : ` (exit ${code ?? "unknown"})`}`,
+          ),
+        );
+    });
+  });
+}
+
+/**
+ * Terminate a child tree and wait for the tree's lifecycle to finish. POSIX targets the detached
+ * process group and checks group liveness; Windows waits for taskkill /T and escalates to /F.
+ */
+export async function terminateProcessTree(
+  proc: Pick<ChildProcess, "pid">,
+  {
+    graceMs = PROCESS_TREE_GRACE_MS,
+    forceWaitMs = PROCESS_TREE_FORCE_WAIT_MS,
+    platform = process.platform,
+  }: TerminateProcessTreeOptions = {},
+): Promise<void> {
+  const pid = proc.pid;
+  if (!pid) return;
+  if (platform !== "win32") {
+    signalPosixProcessGroup(pid, "SIGTERM");
+    if (await waitForExit(() => isPosixProcessGroupAlive(pid), graceMs)) return;
+    signalPosixProcessGroup(pid, "SIGKILL");
+    if (!(await waitForExit(() => isPosixProcessGroupAlive(pid), forceWaitMs)))
+      throw new Error(`Process group ${pid} survived forced termination.`);
+    return;
+  }
+
+  let gracefulFailure: Error | undefined;
+  try {
+    await runTaskkill(pid, false, graceMs);
+  } catch (error) {
+    gracefulFailure = error instanceof Error ? error : new Error(String(error));
+  }
+  if (!isProcessAlive(pid)) return;
+
+  try {
+    await runTaskkill(pid, true, forceWaitMs);
+  } catch (error) {
+    const forceFailure = error instanceof Error ? error : new Error(String(error));
+    if (isProcessAlive(pid))
+      throw new Error(
+        `Failed to terminate process tree ${pid}: ${gracefulFailure?.message ?? "graceful taskkill did not stop it"}; ${forceFailure.message}`,
+      );
+  }
+  if (!(await waitForExit(() => isProcessAlive(pid), forceWaitMs)))
+    throw new Error(`Process tree ${pid} survived forced termination.`);
 }
 
 export function buildPiAgentArgs(options: SpawnPiAgentOptions): string[] {
@@ -93,18 +266,41 @@ export async function spawnPiAgent(options: SpawnPiAgentOptions): Promise<SpawnP
       cwd: options.cwd,
       env: options.env ?? process.env,
       shell: needsShell,
+      detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
     });
     let buffer = "";
     let settled = false;
     let stdinErrored = false;
+    let abortRequested = false;
+    let termination: Promise<void> | undefined;
+    let terminationFailed = false;
+    let finalizing = false;
 
+    const removeAbortListener = () => options.signal?.removeEventListener("abort", killProc);
+    const recordFailure = (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      result.errorMessage ??= message;
+      result.stderr += result.stderr ? `\n${message}` : message;
+    };
     const finish = (exitCode: number) => {
-      if (settled) return;
-      settled = true;
-      if (buffer.trim()) processLine(buffer);
-      result.exitCode = exitCode;
-      resolve(result);
+      if (settled || finalizing) return;
+      finalizing = true;
+      void (async () => {
+        try {
+          await termination;
+          if (buffer.trim()) processLine(buffer);
+        } catch (error) {
+          terminationFailed = true;
+          recordFailure(error);
+          exitCode = 1;
+        } finally {
+          settled = true;
+          removeAbortListener();
+          result.exitCode = terminationFailed ? 1 : exitCode;
+          resolve(result);
+        }
+      })();
     };
 
     const processLine = (line: string) => {
@@ -149,10 +345,14 @@ export async function spawnPiAgent(options: SpawnPiAgentOptions): Promise<SpawnP
     };
 
     proc.stdout.on("data", (data: Buffer) => {
-      buffer += data.toString();
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      for (const line of lines) processLine(line);
+      try {
+        buffer += data.toString();
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) processLine(line);
+      } catch (error) {
+        recordFailure(error);
+      }
     });
     proc.stderr.on("data", (data: Buffer) => {
       result.stderr += data.toString();
@@ -164,18 +364,20 @@ export async function spawnPiAgent(options: SpawnPiAgentOptions): Promise<SpawnP
     });
     proc.once("close", (code) => finish(stdinErrored ? 1 : (code ?? 1)));
     proc.once("error", (error) => {
-      result.errorMessage = error.message;
-      result.stderr += error.message;
+      recordFailure(error);
       finish(1);
     });
 
-    const killProc = () => {
+    function killProc(): void {
+      if (abortRequested) return;
+      abortRequested = true;
       result.wasAborted = true;
-      proc.kill("SIGTERM");
-      setTimeout(() => {
-        if (!proc.killed) proc.kill("SIGKILL");
-      }, 5000).unref();
-    };
+      termination = terminateProcessTree(proc, {
+        graceMs: options.terminationGraceMs,
+        forceWaitMs: options.terminationForceWaitMs,
+      });
+      void termination.catch(() => finish(1));
+    }
     if (options.signal) {
       if (options.signal.aborted) killProc();
       else options.signal.addEventListener("abort", killProc, { once: true });

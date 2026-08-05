@@ -4,8 +4,21 @@ import { randomUUID } from "node:crypto";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { capPreviousOutput, getFinalText, getPromptError } from "./agent-result-utils.js";
+import {
+  capPreviousOutput,
+  capSnapshotOutput,
+  getFinalText,
+  getPromptError,
+  MAX_WORKFLOW_SNAPSHOT_BYTES,
+  MAX_WORKFLOW_SNAPSHOT_LINES,
+  type TextBudget,
+} from "./agent-result-utils.js";
 import { runPrompt } from "./agent-runner.js";
+import {
+  executionCoordinator,
+  type ExecutionCoordinator,
+  type ExecutionLease,
+} from "./execution-coordinator.js";
 
 export const SUBAGENT_RPC_REQUEST_EVENT = "subagents:rpc:v2:request";
 export const SUBAGENT_RPC_REPLY_EVENT_PREFIX = "subagents:rpc:v2:reply:";
@@ -81,21 +94,32 @@ export interface WorkflowRunSnapshot {
   phases: WorkflowPhase[];
 }
 
-export function toSnapshot(run: WorkflowRun): WorkflowRunSnapshot {
+export function toSnapshot(
+  run: WorkflowRun,
+  budget: TextBudget = {
+    bytes: MAX_WORKFLOW_SNAPSHOT_BYTES,
+    lines: MAX_WORKFLOW_SNAPSHOT_LINES,
+  },
+): WorkflowRunSnapshot {
+  const error = run.error === undefined ? undefined : capSnapshotOutput(run.error, budget);
+  const phases = run.phases.map((phase) => {
+    const output = phase.output === undefined ? undefined : capSnapshotOutput(phase.output, budget);
+    return {
+      label: phase.label,
+      status: phase.status,
+      ...(output === undefined ? {} : { output }),
+      ...(phase.startedAt === undefined ? {} : { startedAt: phase.startedAt }),
+      ...(phase.finishedAt === undefined ? {} : { finishedAt: phase.finishedAt }),
+      ...(phase.agents === undefined ? {} : { agents: { ...phase.agents } }),
+    };
+  });
   return {
     id: run.id,
     status: run.status,
     startedAt: run.startedAt,
     ...(run.finishedAt === undefined ? {} : { finishedAt: run.finishedAt }),
-    ...(run.error === undefined ? {} : { error: run.error }),
-    phases: run.phases.map((phase) => ({
-      label: phase.label,
-      status: phase.status,
-      ...(phase.output === undefined ? {} : { output: phase.output }),
-      ...(phase.startedAt === undefined ? {} : { startedAt: phase.startedAt }),
-      ...(phase.finishedAt === undefined ? {} : { finishedAt: phase.finishedAt }),
-      ...(phase.agents === undefined ? {} : { agents: { ...phase.agents } }),
-    })),
+    ...(error === undefined ? {} : { error }),
+    phases,
   };
 }
 
@@ -272,6 +296,7 @@ async function runPromptStep(
   step: WorkflowPromptStep,
   prompt: string,
   signal: AbortSignal,
+  lease: ExecutionLease,
 ): Promise<string> {
   const result = await runPrompt(
     {
@@ -282,13 +307,14 @@ async function runPromptStep(
       tools: step.tools,
       cwd: step.cwd,
     },
-    { cwd: ctx.cwd, signal },
+    { cwd: ctx.cwd, signal, lease },
   );
   const error = getPromptError(result);
   if (error) throw new Error(`Prompt step "${step.label ?? "unnamed"}" failed: ${error}`);
   return getFinalText(result);
 }
 export interface WorkflowRpcOptions {
+  coordinator?: ExecutionCoordinator;
   runStep?: typeof runPromptStep;
 }
 
@@ -296,8 +322,17 @@ async function executeRun(
   run: WorkflowRun,
   ctx: ExtensionContext,
   runStep = runPromptStep,
+  coordinator = executionCoordinator,
 ): Promise<void> {
   const outputs: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  const runStepWithPermit = async (step: WorkflowPromptStep, prompt: string): Promise<string> => {
+    const lease = await coordinator.acquire(run.controller.signal);
+    try {
+      return await runStep(ctx, run.workflow, step, prompt, run.controller.signal, lease);
+    } finally {
+      lease.release();
+    }
+  };
   let previous = "";
   try {
     for (let index = 0; index < run.workflow.chain.length; index++) {
@@ -308,12 +343,9 @@ async function executeRun(
       persistRun(run);
       if (isPromptStep(step)) {
         phase.agents = { done: 0, total: 1 };
-        previous = await runStep(
-          ctx,
-          run.workflow,
+        previous = await runStepWithPermit(
           step,
           template(step.prompt, run.workflow.task, capPreviousOutput(previous), outputs),
-          run.controller.signal,
         );
         phase.agents.done += 1;
         if (step.as) outputs[step.as] = decodedOutput(previous);
@@ -324,12 +356,9 @@ async function executeRun(
           step.parallel,
           step.concurrency ?? 4,
           async (child) => {
-            const result = await runStep(
-              ctx,
-              run.workflow,
+            const result = await runStepWithPermit(
               child,
               template(child.prompt, run.workflow.task, capPreviousOutput(previous), outputs),
-              run.controller.signal,
             );
             phase.agents!.done += 1;
             persistRun(run);
@@ -351,9 +380,7 @@ async function executeRun(
           throw new Error(`Fan-out exceeded maxItems (${items.length}/${step.expand.maxItems}).`);
         phase.agents = { done: 0, total: items.length };
         const output = await mapWithConcurrency(items, step.concurrency ?? 4, async (item) => {
-          const result = await runStep(
-            ctx,
-            run.workflow,
+          const result = await runStepWithPermit(
             step.parallel,
             template(
               step.parallel.prompt,
@@ -362,7 +389,6 @@ async function executeRun(
               outputs,
               item,
             ),
-            run.controller.signal,
           );
           phase.agents!.done += 1;
           persistRun(run);
@@ -395,80 +421,107 @@ async function executeRun(
 export function registerWorkflowRpc(pi: ExtensionAPI, options: WorkflowRpcOptions = {}): void {
   const bus = rpcBus(pi);
   if (!bus) return;
+  const coordinator = options.coordinator ?? executionCoordinator;
   let activeContext: ExtensionContext | undefined;
+  let closed = false;
+  let unsubscribe: (() => void) | undefined;
   const runs = new Map<string, WorkflowRun>();
   pi.on("session_start", (_event, ctx) => {
+    closed = false;
     activeContext = ctx;
   });
-  bus.on(SUBAGENT_RPC_REQUEST_EVENT, (payload) => {
-    const request = payload as RpcRequest;
-    if (request?.version !== 2 || typeof request.requestId !== "string") return;
-    const reply = (success: boolean, data?: unknown, message?: string) =>
-      bus.emit(`${SUBAGENT_RPC_REPLY_EVENT_PREFIX}${request.requestId}`, {
-        version: 2,
-        requestId: request.requestId,
-        success,
-        data,
-        error: success ? undefined : { message: message ?? "Workflow RPC failed." },
-      });
-    if (request.method === "ping") {
-      reply(true, { available: true });
-      return;
+  pi.on("session_shutdown", () => {
+    closed = true;
+    activeContext = undefined;
+    unsubscribe?.();
+    unsubscribe = undefined;
+    coordinator.rejectQueued();
+    for (const run of runs.values()) {
+      if (run.status === "running") run.controller.abort();
     }
-    if (!activeContext) {
-      reply(false, undefined, "No active Pi extension context is available.");
-      return;
-    }
-    if (request.method === "status") {
-      const run = request.params?.id ? runs.get(request.params.id) : undefined;
-      reply(true, run ? toSnapshot(run) : Array.from(runs.values(), toSnapshot));
-      return;
-    }
-    if (request.method === "stop") {
-      const run = request.params?.id ? runs.get(request.params.id) : undefined;
-      if (!run || run.status !== "running") {
-        reply(false, undefined, "No running workflow matches that id.");
-        return;
-      }
-      run.controller.abort();
-      reply(true, { id: run.id, status: "stopping" });
-      return;
-    }
-    if (request.method === "spawn" || request.method === "resume") {
-      const resumedRun =
-        request.method === "resume" && request.params?.id ? runs.get(request.params.id) : undefined;
-      const workflow =
-        request.method === "resume" ? resumedRun?.workflow : request.params?.workflow;
-      if (
-        !workflow ||
-        !Array.isArray(workflow.chain) ||
-        maximumPromptRunCount(workflow) === undefined
-      ) {
-        reply(
-          false,
-          undefined,
-          "Workflow must contain 1–32 prompt-native phases and have a bounded maximum of 100 prompt runs.",
-        );
-        return;
-      }
-      const run: WorkflowRun = {
-        id: `wf_${randomUUID()}`,
-        workflow,
-        status: "running",
-        startedAt: new Date().toISOString(),
-        phases: workflow.chain.map((step, index) => ({
-          label: stepLabel(step, index),
-          status: "pending",
-        })),
-        controller: new AbortController(),
-        runsDir: request.params?.runsDir ?? resumedRun?.runsDir,
-      };
-      runs.set(run.id, run);
-      persistRun(run);
-      void executeRun(run, activeContext, options.runStep);
-      reply(true, toSnapshot(run));
-      return;
-    }
-    reply(false, undefined, `Unsupported method "${request.method}".`);
   });
+  unsubscribe =
+    bus.on(SUBAGENT_RPC_REQUEST_EVENT, (payload) => {
+      const request = payload as RpcRequest;
+      if (request?.version !== 2 || typeof request.requestId !== "string") return;
+      const reply = (success: boolean, data?: unknown, message?: string) =>
+        bus.emit(`${SUBAGENT_RPC_REPLY_EVENT_PREFIX}${request.requestId}`, {
+          version: 2,
+          requestId: request.requestId,
+          success,
+          data,
+          error: success ? undefined : { message: message ?? "Workflow RPC failed." },
+        });
+      if (request.method === "ping") {
+        reply(true, { available: true });
+        return;
+      }
+      if (closed || !activeContext) {
+        reply(false, undefined, "No active Pi extension context is available.");
+        return;
+      }
+      if (request.method === "status") {
+        const run = request.params?.id ? runs.get(request.params.id) : undefined;
+        if (run) reply(true, toSnapshot(run));
+        else {
+          const budget = {
+            bytes: MAX_WORKFLOW_SNAPSHOT_BYTES,
+            lines: MAX_WORKFLOW_SNAPSHOT_LINES,
+          };
+          reply(
+            true,
+            Array.from(runs.values(), (candidate) => toSnapshot(candidate, budget)),
+          );
+        }
+        return;
+      }
+      if (request.method === "stop") {
+        const run = request.params?.id ? runs.get(request.params.id) : undefined;
+        if (!run || run.status !== "running") {
+          reply(false, undefined, "No running workflow matches that id.");
+          return;
+        }
+        run.controller.abort();
+        reply(true, { id: run.id, status: "stopping" });
+        return;
+      }
+      if (request.method === "spawn" || request.method === "resume") {
+        const resumedRun =
+          request.method === "resume" && request.params?.id
+            ? runs.get(request.params.id)
+            : undefined;
+        const workflow =
+          request.method === "resume" ? resumedRun?.workflow : request.params?.workflow;
+        if (
+          !workflow ||
+          !Array.isArray(workflow.chain) ||
+          maximumPromptRunCount(workflow) === undefined
+        ) {
+          reply(
+            false,
+            undefined,
+            "Workflow must contain 1–32 prompt-native phases and have a bounded maximum of 100 prompt runs.",
+          );
+          return;
+        }
+        const run: WorkflowRun = {
+          id: `wf_${randomUUID()}`,
+          workflow,
+          status: "running",
+          startedAt: new Date().toISOString(),
+          phases: workflow.chain.map((step, index) => ({
+            label: stepLabel(step, index),
+            status: "pending",
+          })),
+          controller: new AbortController(),
+          runsDir: request.params?.runsDir ?? resumedRun?.runsDir,
+        };
+        runs.set(run.id, run);
+        persistRun(run);
+        void executeRun(run, activeContext, options.runStep, coordinator);
+        reply(true, toSnapshot(run));
+        return;
+      }
+      reply(false, undefined, `Unsupported method "${request.method}".`);
+    }) ?? undefined;
 }
