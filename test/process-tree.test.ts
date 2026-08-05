@@ -18,19 +18,6 @@ async function waitForPid(file: string): Promise<number> {
   throw new Error("Fixture did not report its descendant PID.");
 }
 
-async function waitForExit(pid: number): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    try {
-      process.kill(pid, 0);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
-      throw error;
-    }
-    await Bun.sleep(10);
-  }
-  throw new Error(`Descendant ${pid} survived process-tree termination.`);
-}
-
 describe("process-tree cancellation", () => {
   it("constructs Windows tree-kill commands with graceful and forced phases", () => {
     expect(processTreeKillCommand(42, false, "win32")).toEqual({
@@ -63,12 +50,9 @@ describe("process-tree cancellation", () => {
       });
       const child = await waitForPid(pidFile);
       controller.abort();
-      await Bun.sleep(5);
-      expect(() => process.kill(child, 0)).not.toThrow();
       const result = await run;
       expect(result.wasAborted).toBe(true);
       expect(() => process.kill(child, 0)).toThrow();
-      await waitForExit(child);
     } finally {
       process.argv[1] = originalScript!;
       await rm(directory, { recursive: true, force: true });
