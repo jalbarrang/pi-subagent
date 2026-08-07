@@ -27,13 +27,32 @@ The only LLM-facing surface is the prompt-native `subagent` tool. It does not di
 
 ### Modes
 
-- Single: `{ prompt, label?, model?, thinking?, tools?, cwd? }`
-- Parallel: `{ tasks: [{ prompt, label?, model?, thinking?, tools?, cwd? }], model?, thinking?, tools?, cwd? }`
-- Chain: `{ chain: [{ prompt, label?, model?, thinking?, tools?, cwd? }], model?, thinking?, tools?, cwd? }`
+- Single: `{ prompt, label?, backend?, model?, thinking?, tools?, cwd? }`
+- Parallel: `{ tasks: [{ prompt, label?, backend?, model?, thinking?, tools?, cwd? }], backend?, model?, thinking?, tools?, cwd? }`
+- Chain: `{ chain: [{ prompt, label?, backend?, model?, thinking?, tools?, cwd? }], backend?, model?, thinking?, tools?, cwd? }`
 
 Child item controls override call-level defaults. Every prompt must be non-empty. Parallel runs support at most eight items. Direct tool runs and workflow children share one process-wide four-child execution limit and wait for capacity when necessary. An explicit empty `tools` array disables all child tools.
 
 A chain replaces each `{previous}` occurrence with the preceding child's final raw text. The engine does not parse or format that output. To bound context growth, it caps it at 64 KiB and appends `[previous output truncated by pi-subagent]` when truncation occurs.
+
+## Backends
+
+Each run chooses a backend with `backend`. The default is `pi`; `claude` runs the child on the [Claude Code CLI](https://code.claude.com/docs/en/headless) instead. The engine normalizes both into the same result shape, so parallel, chain, workflow, and rendering behavior is identical across backends.
+
+```json
+{
+  "backend": "claude",
+  "prompt": "Summarize the auth flow. Return file references. Do not edit files.",
+  "model": "claude-sonnet-4-5",
+  "tools": ["Read", "Grep", "Glob"],
+  "cwd": "/path/to/repository"
+}
+```
+
+`model`, `thinking`, and `tools` are interpreted per backend, so use each backend's own names:
+
+- **`pi`** (default): `model` is `provider/model-id` or a bare id, `thinking` is a pi reasoning level, and `tools` are pi tool names (`read`, `grep`, …).
+- **`claude`**: requires the `claude` executable on `PATH`. `model` is a Claude model alias or id (`sonnet`, `claude-sonnet-4-5`, …). The `claude` CLI has no headless reasoning-level flag, so `thinking` is ignored. `tools` are Claude tool names (`Read`, `Bash`, `Grep`, …) and follow the same allowlist semantics as pi: omitting `tools` grants full autonomy (`--permission-mode bypassPermissions`, matching a trusted child), an explicit allowlist scopes the child to those tools under the default permission mode, and an empty `tools` array leaves no tool allowed so headless permission prompts deny every tool. The child runs `claude -p --output-format stream-json --verbose`, owns its own `~/.claude` session transcript, and its assistant text, tool cycles, token usage, and cost are folded into the same tool result.
 
 ## Execution behavior
 

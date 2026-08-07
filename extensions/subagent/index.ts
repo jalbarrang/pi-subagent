@@ -33,20 +33,26 @@ import { registerWorkflowRpc, type WorkflowRpcOptions } from "./workflow-rpc.js"
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 
+const Backend = Type.Union([Type.Literal("pi"), Type.Literal("claude")], {
+  description: "Agent runtime for the child: 'pi' (default) or 'claude' (Claude Code CLI)",
+});
+
 const PromptItem = Type.Object({
   prompt: Type.String({ description: "Complete prompt text for the isolated child" }),
   label: Type.Optional(
     Type.String({ description: "Inert display label; it never selects instructions or defaults" }),
   ),
+  backend: Type.Optional(Backend),
   model: Type.Optional(Type.String({ description: "Model override" })),
   thinking: Type.Optional(Type.String({ description: "Reasoning level override" })),
-  tools: Type.Optional(Type.Array(Type.String(), { description: "Explicit Pi tool allowlist" })),
+  tools: Type.Optional(Type.Array(Type.String(), { description: "Explicit tool allowlist" })),
   cwd: Type.Optional(Type.String({ description: "Child working directory override" })),
 });
 
 const SubagentParams = Type.Object({
   prompt: Type.Optional(Type.String({ description: "Complete prompt text for one child" })),
   label: Type.Optional(Type.String({ description: "Inert display label" })),
+  backend: Type.Optional(Backend),
   tasks: Type.Optional(
     Type.Array(PromptItem, {
       description: "Independent prompt-native runs to execute in parallel",
@@ -57,7 +63,11 @@ const SubagentParams = Type.Object({
       description: "Sequential prompt-native runs; {previous} receives the capped raw prior output",
     }),
   ),
-  model: Type.Optional(Type.String({ description: "Default model for the run or child items" })),
+  model: Type.Optional(
+    Type.String({
+      description: "Default model for the run or child items (interpreted per backend)",
+    }),
+  ),
   thinking: Type.Optional(
     Type.String({ description: "Default reasoning level for the run or child items" }),
   ),
@@ -134,6 +144,7 @@ function mergeRun(item: PromptRun, defaults: PromptRun): PromptRun {
     model: item.model ?? defaults.model,
     thinking: item.thinking ?? defaults.thinking,
     tools: item.tools ?? defaults.tools,
+    backend: item.backend ?? defaults.backend,
   };
 }
 
@@ -257,9 +268,10 @@ export function registerSubagentExtension(
     name: "subagent",
     label: "Subagent",
     description:
-      "Run complete caller-provided prompts in isolated Pi subprocesses. Use exactly one mode: prompt, tasks, or chain.",
+      "Run complete caller-provided prompts in isolated subprocesses on a chosen backend (pi by default, or claude). Use exactly one mode: prompt, tasks, or chain.",
     promptGuidelines: [
       "Supply the complete child prompt. This tool does not discover named agents or add instructions.",
+      "Set backend to 'claude' to run a child on the Claude Code CLI; omit it to use pi. model, thinking, and tools are interpreted per backend.",
       "Use parallel mode only for independent work; use chain for ordered prompt handoffs.",
       "Review edits and important claims in the parent context.",
     ],
@@ -271,6 +283,7 @@ export function registerSubagentExtension(
         thinking: params.thinking,
         tools: params.tools,
         cwd: params.cwd,
+        backend: params.backend,
       };
       const hasSingle = params.prompt !== undefined;
       const hasTasks = params.tasks !== undefined;

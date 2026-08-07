@@ -1,4 +1,5 @@
 import { createAgentLeafEnvironment, isAgentLeafEnvironment } from "./leaf-policy.js";
+import { spawnClaudeAgent } from "./spawn-claude.js";
 import {
   emptyUsage,
   spawnPiAgent,
@@ -36,5 +37,8 @@ export function prepareSubagentDispatch(
 
 export function dispatchSubagent(options: SpawnPiAgentOptions): Promise<SpawnPiAgentResult> {
   const prepared = prepareSubagentDispatch(options);
-  return prepared.allowed ? spawnPiAgent(prepared.options) : Promise.resolve(prepared.result);
+  if (!prepared.allowed) return Promise.resolve(prepared.result);
+  return prepared.options.backend === "claude"
+    ? spawnClaudeAgent(prepared.options)
+    : spawnPiAgent(prepared.options);
 }

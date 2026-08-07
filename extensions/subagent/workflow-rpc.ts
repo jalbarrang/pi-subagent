@@ -14,6 +14,7 @@ import {
   type TextBudget,
 } from "./agent-result-utils.js";
 import { runPrompt } from "./agent-runner.js";
+import { isBackendName, type BackendName } from "./agent-runner-types.js";
 import {
   executionCoordinator,
   type ExecutionCoordinator,
@@ -33,6 +34,7 @@ export interface WorkflowPromptStep {
   prompt: string;
   label?: string;
   as?: string;
+  backend?: BackendName;
   model?: string;
   thinking?: string;
   tools?: string[];
@@ -238,7 +240,9 @@ function stepLabel(step: WorkflowStep, index: number): string {
   return step.label ?? `Phase ${index + 1}`;
 }
 function validPromptStep(step: WorkflowPromptStep): boolean {
-  return step.prompt.trim().length > 0;
+  return (
+    step.prompt.trim().length > 0 && (step.backend === undefined || isBackendName(step.backend))
+  );
 }
 function validConcurrency(value: unknown): boolean {
   return (
@@ -302,6 +306,7 @@ async function runPromptStep(
     {
       prompt,
       label: step.label,
+      backend: step.backend,
       model: step.model,
       thinking: step.thinking,
       tools: step.tools,

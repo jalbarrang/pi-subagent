@@ -45,6 +45,7 @@ export async function runPrompt(run: PromptRun, options: RunPromptOptions): Prom
       model: run.model,
       thinking: run.thinking,
       tools: run.tools,
+      backend: run.backend,
       signal: options.signal,
       onMessage: (message) => {
         if (spawned) {

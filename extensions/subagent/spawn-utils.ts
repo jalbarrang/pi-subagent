@@ -4,7 +4,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
-import type { UsageStats } from "./agent-runner-types.js";
+import type { BackendName, UsageStats } from "./agent-runner-types.js";
 import { CHILD_ORCHESTRATION_TOOL_NAMES } from "./leaf-policy.js";
 
 export function emptyUsage(): UsageStats {
@@ -37,6 +37,8 @@ export interface SpawnPiAgentOptions {
   model?: string;
   thinking?: string;
   tools?: string[];
+  /** Agent runtime to spawn. Defaults to `pi`. */
+  backend?: BackendName;
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   onMessage?: (msg: Message) => void;
@@ -248,24 +250,47 @@ export function sendPromptToStdin(
   stdin.end(prompt, "utf8");
 }
 
-/** Spawn Pi and send the caller-provided complete prompt, unchanged, over stdin. */
-export async function spawnPiAgent(options: SpawnPiAgentOptions): Promise<SpawnPiAgentResult> {
-  const result: SpawnPiAgentResult = {
-    exitCode: 0,
-    messages: [],
-    stderr: "",
-    wasAborted: false,
-    usage: emptyUsage(),
-  };
+/** Shared fields every backend's spawn result carries; backends extend it with their own payload. */
+export interface BaseProcessResult {
+  exitCode: number;
+  stderr: string;
+  wasAborted: boolean;
+  errorMessage?: string;
+}
 
-  const args = buildPiAgentArgs(options);
-  return new Promise<SpawnPiAgentResult>((resolve) => {
-    const invocation = getPiInvocation(args);
-    const needsShell = process.platform === "win32" && invocation.command === "pi";
-    const proc = spawn(invocation.command, invocation.args, {
+export interface RunLineDelimitedProcessOptions {
+  command: string;
+  args: string[];
+  cwd: string;
+  prompt: string;
+  env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
+  /** Windows launchers resolved to a shell alias (e.g. `pi`, `claude.cmd`) need a shell. */
+  needsShell?: boolean;
+  /** Called once per complete stdout line, plus once for any trailing partial line at close. */
+  onLine: (line: string) => void;
+  /** Injectable only for lifecycle tests. */
+  terminationGraceMs?: number;
+  /** Injectable only for lifecycle tests. */
+  terminationForceWaitMs?: number;
+}
+
+/**
+ * Spawn a detached child, stream the caller's complete prompt over stdin unchanged, and parse
+ * newline-delimited stdout via `onLine`. The shared lifecycle owns process-group termination on
+ * abort, trailing-line flushing, and exit-code reconciliation so each backend only supplies its
+ * own line parser. The caller's `result` accumulates backend payload in `onLine`; this runner
+ * mutates the shared `exitCode`, `stderr`, `wasAborted`, and `errorMessage` fields.
+ */
+export function runLineDelimitedProcess<R extends BaseProcessResult>(
+  result: R,
+  options: RunLineDelimitedProcessOptions,
+): Promise<R> {
+  return new Promise<R>((resolve) => {
+    const proc = spawn(options.command, options.args, {
       cwd: options.cwd,
       env: options.env ?? process.env,
-      shell: needsShell,
+      shell: options.needsShell ?? false,
       detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -289,7 +314,7 @@ export async function spawnPiAgent(options: SpawnPiAgentOptions): Promise<SpawnP
       void (async () => {
         try {
           await termination;
-          if (buffer.trim()) processLine(buffer);
+          if (buffer.trim()) options.onLine(buffer);
         } catch (error) {
           terminationFailed = true;
           recordFailure(error);
@@ -303,53 +328,12 @@ export async function spawnPiAgent(options: SpawnPiAgentOptions): Promise<SpawnP
       })();
     };
 
-    const processLine = (line: string) => {
-      if (!line.trim()) return;
-      let event: any;
-      try {
-        event = JSON.parse(line);
-      } catch {
-        return;
-      }
-      if (event.type === "message_end" && event.message) {
-        const msg = event.message as Message;
-        result.messages.push(msg);
-        if (msg.role === "assistant") {
-          result.usage.turns++;
-          const usage = msg.usage;
-          if (usage) {
-            result.usage.input += usage.input || 0;
-            result.usage.output += usage.output || 0;
-            result.usage.cacheRead += usage.cacheRead || 0;
-            result.usage.cacheWrite += usage.cacheWrite || 0;
-            result.usage.cost += usage.cost?.total || 0;
-            result.usage.contextTokens = usage.totalTokens || 0;
-          }
-          if (!result.model && msg.model) result.model = msg.model;
-          if (msg.stopReason) result.stopReason = msg.stopReason;
-          if (msg.errorMessage) result.errorMessage = msg.errorMessage;
-        }
-        options.onMessage?.(msg);
-      }
-      if (event.type === "tool_result_end" && event.message) {
-        result.messages.push(event.message as Message);
-        options.onToolResult?.(event.message as Message);
-      }
-      if (event.type === "tool_execution_start" && event.toolName) {
-        options.onToolExecutionStart?.({
-          toolCallId: event.toolCallId ?? "",
-          toolName: event.toolName,
-          args: event.args ?? {},
-        });
-      }
-    };
-
     proc.stdout.on("data", (data: Buffer) => {
       try {
         buffer += data.toString();
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
-        for (const line of lines) processLine(line);
+        for (const line of lines) options.onLine(line);
       } catch (error) {
         recordFailure(error);
       }
@@ -383,7 +367,75 @@ export async function spawnPiAgent(options: SpawnPiAgentOptions): Promise<SpawnP
       else options.signal.addEventListener("abort", killProc, { once: true });
     }
 
-    // end() is intentional: Pi reads the whole prompt from stdin before executing it.
+    // end() is intentional: the child reads the whole prompt from stdin before executing it.
     sendPromptToStdin(proc.stdin, options.prompt);
+  });
+}
+
+/** Spawn Pi and send the caller-provided complete prompt, unchanged, over stdin. */
+export function spawnPiAgent(options: SpawnPiAgentOptions): Promise<SpawnPiAgentResult> {
+  const result: SpawnPiAgentResult = {
+    exitCode: 0,
+    messages: [],
+    stderr: "",
+    wasAborted: false,
+    usage: emptyUsage(),
+  };
+
+  const invocation = getPiInvocation(buildPiAgentArgs(options));
+  const needsShell = process.platform === "win32" && invocation.command === "pi";
+
+  const processLine = (line: string) => {
+    if (!line.trim()) return;
+    let event: any;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      return;
+    }
+    if (event.type === "message_end" && event.message) {
+      const msg = event.message as Message;
+      result.messages.push(msg);
+      if (msg.role === "assistant") {
+        result.usage.turns++;
+        const usage = msg.usage;
+        if (usage) {
+          result.usage.input += usage.input || 0;
+          result.usage.output += usage.output || 0;
+          result.usage.cacheRead += usage.cacheRead || 0;
+          result.usage.cacheWrite += usage.cacheWrite || 0;
+          result.usage.cost += usage.cost?.total || 0;
+          result.usage.contextTokens = usage.totalTokens || 0;
+        }
+        if (!result.model && msg.model) result.model = msg.model;
+        if (msg.stopReason) result.stopReason = msg.stopReason;
+        if (msg.errorMessage) result.errorMessage = msg.errorMessage;
+      }
+      options.onMessage?.(msg);
+    }
+    if (event.type === "tool_result_end" && event.message) {
+      result.messages.push(event.message as Message);
+      options.onToolResult?.(event.message as Message);
+    }
+    if (event.type === "tool_execution_start" && event.toolName) {
+      options.onToolExecutionStart?.({
+        toolCallId: event.toolCallId ?? "",
+        toolName: event.toolName,
+        args: event.args ?? {},
+      });
+    }
+  };
+
+  return runLineDelimitedProcess(result, {
+    command: invocation.command,
+    args: invocation.args,
+    cwd: options.cwd,
+    prompt: options.prompt,
+    env: options.env,
+    signal: options.signal,
+    needsShell,
+    onLine: processLine,
+    terminationGraceMs: options.terminationGraceMs,
+    terminationForceWaitMs: options.terminationForceWaitMs,
   });
 }
