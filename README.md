@@ -39,6 +39,8 @@ A chain replaces each `{previous}` occurrence with the preceding child's final r
 
 Each run chooses a backend with `backend`. The default is `pi`; `claude` runs the child on the [Claude Code CLI](https://code.claude.com/docs/en/headless) instead. The engine normalizes both into the same result shape, so parallel, chain, workflow, and rendering behavior is identical across backends.
 
+Omitting `backend` while naming a bare `claude-*` model selects the `claude` backend, because those ids only exist on the Claude Code CLI. An explicit `backend` always wins, and a provider-qualified id such as `anthropic/claude-sonnet-4-5` is left to Pi's own routing.
+
 ```json
 {
   "backend": "claude",
