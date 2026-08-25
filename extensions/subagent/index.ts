@@ -271,7 +271,7 @@ export function registerSubagentExtension(
       "Run complete caller-provided prompts in isolated subprocesses on a chosen backend (pi by default, or claude). Use exactly one mode: prompt, tasks, or chain.",
     promptGuidelines: [
       "Supply the complete child prompt. This tool does not discover named agents or add instructions.",
-      "Set backend to 'claude' to run a child on the Claude Code CLI; omit it to use pi. model, thinking, and tools are interpreted per backend.",
+      "Set backend to 'claude' to run a child on the Claude Code CLI; omit it to use pi, except that a bare claude-* model selects claude on its own. model, thinking, and tools are interpreted per backend.",
       "Use parallel mode only for independent work; use chain for ordered prompt handoffs.",
       "Review edits and important claims in the parent context.",
     ],
